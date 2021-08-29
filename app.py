@@ -7,7 +7,7 @@ app = Flask(__name__)
 def transform_game(game):
     return {
         **game,
-        'lastUpdate': "[modified]" + game['lastUpdate']
+        'lastUpdate': "[modified] " + game['lastUpdate']
     }
 
 
