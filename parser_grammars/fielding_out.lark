@@ -1,0 +1,13 @@
+?start: flyout | ground_out | fielders_choice
+
+ground_out: NAME " hit a ground out to " NAME "."
+flyout: NAME " hit a flyout to " NAME "."
+
+fielders_choice: runner_out _N batter_reaches
+runner_out: NAME " out at " BASE " base."
+batter_reaches: NAME " reaches on fielder's choice."
+
+BASE: "first" | "second" | "third" | "fourth" | "fifth"
+
+%import .blaseball_common.NAME
+%import .blaseball_common._N

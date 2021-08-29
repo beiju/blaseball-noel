@@ -1,0 +1,8 @@
+start: NAME " hits a " HIT_TYPE "!"
+
+HIT_TYPE: "Single"
+        | "Double"
+        | "Triple"
+        | "Quadruple"
+
+%import .blaseball_common.NAME

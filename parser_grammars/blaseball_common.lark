@@ -1,8 +1,12 @@
-start: NAME " hit a flyout to " NAME "."
-
 NAME: (NAME_PART " ")* NAME_LAST_PART
 
 // Any non-whitespace sequence
 NAME_PART: /\S*/
 // Any non-whitespace sequence not ending with a punctuation mark
 NAME_LAST_PART: /\S*[^\s.]/
+
+// Version of newline that doesn't get its own token in the tree. Make its name
+// shorter while we're at it
+_N: NEWLINE
+
+%import common.NEWLINE

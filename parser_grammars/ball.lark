@@ -1,0 +1,3 @@
+start: "Ball. " INT "-" INT
+
+%import common.INT
