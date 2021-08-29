@@ -1,0 +1,9 @@
+?start: stolen_base | caught_stealing
+
+stolen_base: NAME " steals " BASE " base!"
+
+caught_stealing: NAME " gets caught stealing " BASE " base."
+
+BASE: "first" | "second" | "third" | "fourth" | "fifth"
+
+%import .blaseball_common.NAME

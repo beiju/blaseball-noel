@@ -1,4 +1,7 @@
-start: NAME " hits a " HIT_TYPE "!"
+start: hit "!" (_N score)*
+
+hit: NAME " hits a " HIT_TYPE
+score: NAME " scores!"
 
 HIT_TYPE: "Single"
         | "Double"
@@ -6,3 +9,4 @@ HIT_TYPE: "Single"
         | "Quadruple"
 
 %import .blaseball_common.NAME
+%import .blaseball_common._N

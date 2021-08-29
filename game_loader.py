@@ -30,6 +30,7 @@ def get_game(tester, game_id):
     print("Processing feed events...")
     game = GameState([game_update_by_play[k]
                       for k in sorted(game_update_by_play.keys())])
+    generated_updates = {}
     for i, feed_event in enumerate(feed_events(game_id)):
         play_count = feed_event['metadata']['play']
         game_update = game_update_by_play.get(play_count + 1, None)
@@ -38,6 +39,9 @@ def get_game(tester, game_id):
         generated_update = game.update(feed_event, game_update)
 
         assert_updates_equivalent(tester, game_update, generated_update)
+        generated_updates[generated_update['playCount']] = generated_update
+
+    return generated_updates
 
 
 def feed_events(game_id):
