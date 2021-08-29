@@ -28,9 +28,8 @@ def get_game(tester, game_id):
             game_update_by_play[play_count] = game_update
 
     print("Processing feed events...")
-    reference_i = min(k for k, v in game_update_by_play.items()
-                      if v['data']['homePitcher'] is not None)
-    game = GameState(game_update_by_play[reference_i])
+    game = GameState([game_update_by_play[k]
+                      for k in sorted(game_update_by_play.keys())])
     for i, feed_event in enumerate(feed_events(game_id)):
         play_count = feed_event['metadata']['play']
         game_update = game_update_by_play.get(play_count + 1, None)
