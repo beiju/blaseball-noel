@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from itertools import chain
 from typing import Dict, Callable, Optional, List
-from blaseball_mike.models import Team
+from blaseball_mike.models import Team, Player
 import logging
 
 from parsers import Parsers
@@ -36,6 +36,18 @@ class PlayerState:
     id: str
     name: str
     mod: str
+    legacy_item: Optional[str]
+
+    @classmethod
+    def from_player(cls, player: Player):
+        legacy_item = None
+        if player.bat.id:  # `bat` is truthy even if player doesn't have one
+            legacy_item = player.bat.name
+
+        return PlayerState(id=player.id,
+                           name=player.name,
+                           mod=mod_for_player(player),
+                           legacy_item=legacy_item)
 
 
 @dataclass
@@ -53,14 +65,12 @@ class TeamState:
         self.pitcher = PlayerState(
             id=first_truthy(updates, prefix + 'Pitcher'),
             name=first_truthy(updates, prefix + 'PitcherName'),
-            mod=first_truthy(updates, prefix + 'PitcherMod') or '')
+            mod=first_truthy(updates, prefix + 'PitcherMod') or '',
+            legacy_item='')  # Pitchers may have items but they're not displayed
         assert self.pitcher.id
         assert self.pitcher.name
 
-        self.lineup = [
-            PlayerState(player.id, player.name, mod_for_player(player))
-            for player in team.lineup
-        ]
+        self.lineup = [PlayerState.from_player(p) for p in team.lineup]
 
         self.batter_index = -1
 
@@ -300,7 +310,10 @@ class GameState:
         self.game_update[prefix + 'BatterName'] = batter.name
         self.game_update[prefix + 'BatterMod'] = batter.mod
 
-        description = f"{batter.name} batting for the {team_state.nickname}."
+        description = f"{batter.name} batting for the {team_state.nickname}"
+        if batter.legacy_item:
+            description += f", wielding {batter.legacy_item}"
+        description += "."
 
         assert feed_event['description'] == description
         self.game_update['lastUpdate'] = description
@@ -482,6 +495,16 @@ class GameState:
 
         self._update_count(feed_event, ["Foul Ball"])
 
+    def update_strike_zapped(self, feed_event: dict, _: Optional[dict]):
+        assert self.expects_pitch
+
+        description = "The Electricity zaps a strike away!"
+        assert feed_event['description'] == description
+        self.game_update['lastUpdate'] = description
+
+        assert self.game_update['atBatStrikes'] > 0
+        self.game_update['atBatStrikes'] -= 1
+
     def update_strike(self, feed_event: dict, _: Optional[dict]):
         assert self.expects_pitch
 
@@ -567,9 +590,14 @@ class GameState:
 
     def update_game_score(self, feed_event: dict, _: Optional[dict]):
         assert self.expects_game_end
+        
+        away_text = f"{self.away.nickname} {self.game_update['awayScore']}"
+        home_text = f"{self.home.nickname} {self.game_update['homeScore']}"
+        if self.game_update['homeScore'] > self.game_update['awayScore']:
+            description = f"{home_text}, {away_text}"
+        else:
+            description = f"{away_text}, {home_text}"
 
-        description = (f"{self.away.nickname} {self.game_update['awayScore']}, "
-                       f"{self.home.nickname} {self.game_update['homeScore']}")
         assert description == feed_event['description']
         self.game_update['lastUpdate'] = description
 
@@ -646,6 +674,13 @@ class GameState:
         self.expects_pitch = False
         self.expects_game_end = True
 
+    def update_flavor_text(self, feed_event: dict, _: Optional[dict]):
+        # I don't know if this only happens in place of a pitch, but we'll see!
+        assert self.expects_pitch
+
+        # There is nothing to do but copy over the description
+        self.game_update['lastUpdate'] = feed_event['description']
+
 
 GameState.update_type = {
     0: GameState.update_lets_go,
@@ -663,5 +698,7 @@ GameState.update_type = {
     13: GameState.update_strike,
     14: GameState.update_ball,
     15: GameState.update_foul_ball,
+    25: GameState.update_strike_zapped,
     28: GameState.update_inning_end,
+    73: GameState.update_flavor_text,
 }
