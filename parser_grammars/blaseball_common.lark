@@ -9,4 +9,6 @@ NAME_LAST_PART: /\S*[^\s.]/
 // shorter while we're at it
 _N: NEWLINE
 
+use_free_refill: NAME " used their Free Refill." _N NAME " Refills the In!"
+
 %import common.NEWLINE

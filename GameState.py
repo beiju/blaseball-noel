@@ -410,8 +410,10 @@ class GameState:
         runs_scored = 0
         for parsed_item in parsed_rest:
             assert parsed_item.data == 'sacrifice'
-            advanced_batter, = parsed_item.children
+            advanced_batter, *parsed_extras = parsed_item.children
             runs_scored += self._score_player(advanced_batter)
+
+            self._apply_scoring_extras(parsed_extras, advanced_batter)
 
         self._record_runs(runs_scored)
         self.game_update['lastUpdate'] = feed_event['description']
@@ -558,28 +560,10 @@ class GameState:
         for parsed_item in parsed_rest:
             assert parsed_item.data == 'score'
 
-            scoring_player_name, *parsed_sub_rest = parsed_item.children
+            scoring_player_name, *parsed_extras = parsed_item.children
             runs_scored += self._score_player(scoring_player_name)
 
-            for parsed_sub_item in parsed_sub_rest:
-                assert parsed_sub_item.data == 'use_free_refill'
-                parsed_name1, parsed_name2 = parsed_sub_item.children
-                assert parsed_name1 == scoring_player_name
-                assert parsed_name2 == scoring_player_name
-
-                self.game_update['halfInningOuts'] -= 1
-
-                # Need to clear mod from the scoring player
-                possible_scorers = [p for p in self.batting_team().lineup
-                                    if p.name == scoring_player_name]
-
-                # If this assertion fails it's because there are two players
-                # with the same name and I need to figure out which one scored
-                assert len(possible_scorers) == 1
-
-                # This is gonna break if removing the free refill is supposed to
-                # reveal another mod in its place
-                possible_scorers[0].mod = ''
+            self._apply_scoring_extras(parsed_extras, scoring_player_name)
 
         self._record_runs(runs_scored)
         self.game_update['lastUpdate'] = feed_event['description']
@@ -587,6 +571,27 @@ class GameState:
         self._end_atbat()
         # This must be last or it errors when this event ends the half-inning
         self._maybe_advance_baserunners(game_update)
+
+    def _apply_scoring_extras(self, parsed_extras, scoring_player_name):
+        for parsed_sub_item in parsed_extras:
+            assert parsed_sub_item.data == 'use_free_refill'
+            parsed_name1, parsed_name2 = parsed_sub_item.children
+            assert parsed_name1 == scoring_player_name
+            assert parsed_name2 == scoring_player_name
+
+            self.game_update['halfInningOuts'] -= 1
+
+            # Need to clear mod from the scoring player
+            possible_scorers = [p for p in self.batting_team().lineup
+                                if p.name == scoring_player_name]
+
+            # If this assertion fails it's because there are two players
+            # with the same name and I need to figure out which one scored
+            assert len(possible_scorers) == 1
+
+            # This is gonna break if removing the free refill is supposed to
+            # reveal another mod in its place
+            possible_scorers[0].mod = ''
 
     def update_game_score(self, feed_event: dict, _: Optional[dict]):
         assert self.expects_game_end
