@@ -1,7 +1,10 @@
-start: hit "!" (_N score)*
+start: hit (_N score)*
 
-hit: NAME " hits a " HIT_TYPE
-score: NAME " scores!"
+hit: NAME " hits a " HIT_TYPE "!"
+score: NAME " scores!" (_N use_free_refill)?
+
+use_free_refill: NAME " used their Free Refill." _N NAME " Refills the In!"
+
 
 HIT_TYPE: "Single"
         | "Double"

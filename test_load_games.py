@@ -15,7 +15,7 @@ class TestAllGames(unittest.TestCase):
         self.assertTrue(True)
 
     @parameterized.expand([(g['gameId'],)
-                           for g in chronicler.get_games(season=13, count=1)])
+                           for g in chronicler.get_games(season=12, count=1)])
     def test_s12_game(self, game_id):
         game = get_game(self, game_id)
         self.assertIsInstance(game, dict)

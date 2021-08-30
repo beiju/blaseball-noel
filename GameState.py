@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from itertools import chain
 from typing import Dict, Callable, Optional, List
 from blaseball_mike.models import Team
 import logging
@@ -19,8 +20,14 @@ BASE_NUM_FOR_NAME = {
     'fourth': 3,
 }
 
+DISPLAYED_MODS = {'COFFEE_RALLY'}
+
 
 def mod_for_player(player):
+    for mod in chain(player.perm_attr, player.seas_attr,
+                     player.game_attr, player.item_attr):
+        if mod.id in DISPLAYED_MODS:
+            return mod.id
     return ""
 
 
@@ -193,7 +200,8 @@ class GameState:
         return self.home if self.game_update['topOfInning'] else self.away
 
     def update(self, feed_event, game_update):
-        print(feed_event['type'], feed_event['description'])
+        print("type", f"{feed_event['type']},".ljust(4),
+              feed_event['description'].replace("\n", "\n          "))
 
         # Always reset this, since scores are rare
         self.game_update['scoreUpdate'] = ""
@@ -442,7 +450,10 @@ class GameState:
 
         self.game_update['halfInningOuts'] = 0
         self.game_update['phase'] = 3
-        self.game_update[self.top_or_bottom(negate=True) + 'InningScore'] = 0
+        if self.top_or_bottom() == 'bottom':
+            self.game_update['topInningScore'] = 0
+            self.game_update['bottomInningScore'] = 0
+            self.game_update['halfInningScore'] = 0
 
         self.expects_batter_up = False
         if (self.game_update['inning'] >= 8 and
@@ -524,8 +535,28 @@ class GameState:
         for parsed_item in parsed_rest:
             assert parsed_item.data == 'score'
 
-            scoring_player_name, = parsed_item.children
+            scoring_player_name, *parsed_sub_rest = parsed_item.children
             runs_scored += self._score_player(scoring_player_name)
+
+            for parsed_sub_item in parsed_sub_rest:
+                assert parsed_sub_item.data == 'use_free_refill'
+                parsed_name1, parsed_name2 = parsed_sub_item.children
+                assert parsed_name1 == scoring_player_name
+                assert parsed_name2 == scoring_player_name
+
+                self.game_update['halfInningOuts'] -= 1
+
+                # Need to clear mod from the scoring player
+                possible_scorers = [p for p in self.batting_team().lineup
+                                    if p.name == scoring_player_name]
+
+                # If this assertion fails it's because there are two players
+                # with the same name and I need to figure out which one scored
+                assert len(possible_scorers) == 1
+
+                # This is gonna break if removing the free refill is supposed to
+                # reveal another mod in its place
+                possible_scorers[0].mod = ''
 
         self._record_runs(runs_scored)
         self.game_update['lastUpdate'] = feed_event['description']
@@ -552,10 +583,12 @@ class GameState:
             self.game_update['scoreUpdate'] = f"{runs_scored} Runs scored!"
 
     def _score_player(self, scoring_player_name):
-        # I think scoring players are always printed in order?
-        assert self.game_update['baseRunnerNames'][0] == scoring_player_name
+        # I thought you could assume the scoring player was the 0th, but nope!
+        # https://reblase.sibr.dev/game/259150c5-e086-4d6c-b2da-80b576885059
+        #   #e6d37189-3fff-95b2-a542-1266836a1f64
+        index = self.game_update['baseRunnerNames'].index(scoring_player_name)
 
-        self._remove_baserunner_by_index(0)
+        self._remove_baserunner_by_index(index)
         return self._score_runs(1)
 
     def _remove_baserunner_by_index(self, list_index):
