@@ -121,9 +121,12 @@ class GameState:
 
         self.expects_reverberate = {'home': False, 'away': False}
 
+        # Updates with play count 0 have the wrong timestamp
+        time_update = next(u for u in updates if u['data']['playCount'] > 0)
+
         # Chronicler adds timestamp so I can depend on it existing
-        self.away = TeamState(updates, updates[0]['timestamp'], 'away')
-        self.home = TeamState(updates, updates[0]['timestamp'], 'home')
+        self.away = TeamState(updates, time_update['timestamp'], 'away')
+        self.home = TeamState(updates, time_update['timestamp'], 'home')
         self.haunter = None
 
         self.game_update = {
@@ -490,14 +493,18 @@ class GameState:
 
             # Have to figure out which baserunner gets out. I suppose you could
             # deduce it sometimes from future events but for now I require the
-            # game update
-            assert game_update is not None
-            set_diff = (set(self.game_update['baseRunners']) -
-                        set(game_update['baseRunners']))
-            assert len(set_diff) == 1
-            batter_out_id = set_diff.pop()
-            batter_out_i = self.game_update['baseRunners'].index(batter_out_id)
-            self._remove_baserunner_by_index(batter_out_i)
+            # game update.
+            # Only do it if the inning isn't ending. If the inning is ending the
+            # baserunners are cleared from the game_update.
+            if not (self.game_update['halfInningOuts'] + 1 >=
+                    self.game_update[self.prefix() + 'Outs']):
+                assert game_update is not None
+                set_diff = (set(self.game_update['baseRunners']) -
+                            set(game_update['baseRunners']))
+                assert len(set_diff) == 1
+                out_id = set_diff.pop()
+                out_i = self.game_update['baseRunners'].index(out_id)
+                self._remove_baserunner_by_index(out_i)
         else:
             assert parsed.data == 'fielders_choice'
             (parsed_out, *parsed_scores, parsed_reaches) = parsed.children
