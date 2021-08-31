@@ -8,6 +8,7 @@ def _make_parser(name):
 
 
 class Parsers:
+    batter_up = _make_parser('batter_up')
     steal = _make_parser('steal')
     ball = _make_parser('ball')
     hit = _make_parser('hit')

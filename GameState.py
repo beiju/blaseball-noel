@@ -103,6 +103,7 @@ class GameState:
         # Chronicler adds timestamp so I can depend on it existing
         self.away = TeamState(updates, updates[0]['timestamp'], 'away')
         self.home = TeamState(updates, updates[0]['timestamp'], 'home')
+        self.haunter = None
 
         self.game_update = {
             'id': updates[0]['data']['id'],
@@ -200,6 +201,8 @@ class GameState:
             return 'bottom'
 
     def batter(self) -> PlayerState:
+        if self.haunter:
+            return self.haunter
         team_state = self.batting_team()
         return team_state.lineup[team_state.batter_index]
 
@@ -301,22 +304,39 @@ class GameState:
     def update_batter_up(self, feed_event: dict, _: Optional[dict]):
         assert self.expects_batter_up
 
+        parsed = Parsers.batter_up.parse(feed_event['description'])
+
         team_state = self.batting_team()
         team_state.advance_batter()
 
+        if parsed.children[0].data == 'inhabiting':
+            haunter_name, haunted_name = parsed.children[0].children
+            haunter = Player.load_one_at_time(feed_event['playerTags'][0],
+                                              feed_event['created'])
+            assert haunter_name == haunter.name
+            assert haunted_name == self.batter().name
+            self.haunter = PlayerState.from_player(haunter)
+            parsed.children.pop(0)
+
+        parsed_batter_up, *parsed_rest = parsed.children
+        parsed_batter_name, parsed_team_name = parsed_batter_up.children
         batter = self.batter()
+
+        assert team_state.nickname == parsed_team_name
+        assert batter.name == parsed_batter_name
+
+        for parsed_item in parsed_rest:
+            assert parsed_item.data == 'wielding'
+            parsed_bat, = parsed_item.children
+
+            assert parsed_bat == batter.legacy_item
+
         prefix = self.prefix()
         self.game_update[prefix + 'Batter'] = batter.id
         self.game_update[prefix + 'BatterName'] = batter.name
         self.game_update[prefix + 'BatterMod'] = batter.mod
 
-        description = f"{batter.name} batting for the {team_state.nickname}"
-        if batter.legacy_item:
-            description += f", wielding {batter.legacy_item}"
-        description += "."
-
-        assert feed_event['description'] == description
-        self.game_update['lastUpdate'] = description
+        self.game_update['lastUpdate'] = feed_event['description']
         self.game_update[prefix + 'TeamBatterCount'] += 1
 
         self.expects_batter_up = False
@@ -452,6 +472,8 @@ class GameState:
 
         self.expects_pitch = False
         self.expects_batter_up = True
+
+        self.haunter = None
 
     def _end_half_inning(self):
         self._end_atbat()

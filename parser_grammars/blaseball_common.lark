@@ -1,9 +1,8 @@
-NAME: (NAME_PART " ")* NAME_LAST_PART
+NAME: (NAME_PART | PUNCTUATION | " ")+
 
 // Any non-whitespace sequence
-NAME_PART: /\S*/
-// Any non-whitespace sequence not ending with a punctuation mark
-NAME_LAST_PART: /\S*[^\s.]/
+NAME_PART: /\S+/
+PUNCTUATION: /[.,]/
 
 // Version of newline that doesn't get its own token in the tree. Make its name
 // shorter while we're at it
