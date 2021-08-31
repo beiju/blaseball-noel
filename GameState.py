@@ -809,9 +809,15 @@ class GameState:
         self.expects_pitch = False
         self.expects_game_end = True
 
-    def update_flavor_text(self, feed_event: dict, _: Optional[dict]):
-        # I don't know if this only happens in place of a pitch, but we'll see!
+    def update_no_state_change_pitch(self, feed_event: dict, _: Optional[dict]):
         assert self.expects_pitch
+
+        # There is nothing to do but copy over the description
+        self.game_update['lastUpdate'] = feed_event['description']
+
+    def update_no_state_change_batter_up(self, feed_event: dict,
+                                         _: Optional[dict]):
+        assert self.expects_batter_up
 
         # There is nothing to do but copy over the description
         self.game_update['lastUpdate'] = feed_event['description']
@@ -836,5 +842,6 @@ GameState.update_type = {
     25: GameState.update_strike_zapped,
     27: GameState.update_mild_pitch,
     28: GameState.update_inning_end,
-    73: GameState.update_flavor_text,
+    73: GameState.update_no_state_change_pitch,  # Peanut flavor text
+    92: GameState.update_no_state_change_batter_up,  # Superyummy
 }
