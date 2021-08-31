@@ -411,13 +411,17 @@ class GameState:
     def update_walk(self, feed_event: dict, _: Optional[dict]):
         assert self.expects_pitch
 
-        batter = self.batter()
-        description = batter.name + " draws a walk."
+        parsed = Parsers.walk.parse(feed_event['description'])
+        parsed_walk, *parsed_rest = parsed.children
+        parsed_walker_name, = parsed_walk.children
 
-        assert feed_event['description'] == description
-        self.game_update['lastUpdate'] = description
+        batter = self.batter()
+        assert parsed_walker_name == batter.name
 
         self._update_walk_generic(batter)
+        self._update_scores(parsed_rest)
+
+        self.game_update['lastUpdate'] = feed_event['description']
 
     def _update_walk_generic(self, batter):
         self._player_to_base(batter, 0)  # Until the Beams get here
@@ -840,8 +844,8 @@ class GameState:
                 self.game_update['basesOccupied'][runner_i] = next_base
             highest_occupied_base = self.game_update['basesOccupied'][runner_i]
 
-        # TODO handle scorers
-        assert highest_occupied_base < self.game_update[self.prefix() + 'Bases']
+        # Don't do anything about scoring players -- that should be parsed
+        # separately
 
     def update_inning_end(self, feed_event: dict, _: Optional[dict]):
         assert self.expects_inning_end
@@ -855,16 +859,6 @@ class GameState:
 
         self.expects_inning_end = False
         self.expects_half_inning_start = True
-
-    def _advance_baserunners_past_base(self, past_base):
-        # Doing truly TDD stuff here. Implementations that will work exactly on
-        # the test cases provided and not the general case.
-        occupied = self.game_update['basesOccupied']
-        if not occupied:
-            return []
-        elif len(occupied) == 1:
-            if occupied[0] <= past_base:
-                occupied[0] = past_base + 1
 
     def _end_game(self):
         self.game_update['topInningScore'] = 0

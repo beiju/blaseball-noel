@@ -11,6 +11,7 @@ class Parsers:
     batter_up = _make_parser('batter_up')
     steal = _make_parser('steal')
     ball = _make_parser('ball')
+    walk = _make_parser('walk')
     hit = _make_parser('hit')
     home_run = _make_parser('home_run')
     fielding_out = _make_parser('fielding_out')

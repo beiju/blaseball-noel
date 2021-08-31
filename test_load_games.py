@@ -13,7 +13,7 @@ class TestAllGames(unittest.TestCase):
 
     @parameterized.expand([(g['gameId'],)
                            for g in reversed(chronicler.get_games(season=12,
-                                                                  count=9))])
+                                                                  count=11))])
     def test_s12_game(self, game_id):
         game = get_game(self, game_id)
         self.assertIsInstance(game, dict)
