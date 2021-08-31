@@ -1,0 +1,11 @@
+start: home_run (_N use_free_refill)*
+
+home_run: NAME " hits a " (solo_hr | multi_hr) " home run!"
+
+solo_hr: "solo"
+multi_hr: INT "-run"
+
+%import common.INT
+%import .blaseball.NAME
+%import .blaseball._N
+%import .blaseball.use_free_refill

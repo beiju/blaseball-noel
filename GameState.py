@@ -509,7 +509,7 @@ class GameState:
 
         if (self.game_update['halfInningOuts'] >=  # I see you, Crowvertime
                 self.game_update[self.prefix() + 'Outs']):
-            self._end_half_inning()
+            self._end_half_inning(for_batter)
         elif for_batter:
             # Only end the at bat if the out belongs to the runner. Which it
             # usually does, but not for e.g. caught stealing.
@@ -529,7 +529,7 @@ class GameState:
 
         self.haunter = None
 
-    def _end_half_inning(self):
+    def _end_half_inning(self, for_batter=True):
         self._end_atbat()
 
         self.game_update['baseRunners'] = []
@@ -545,6 +545,14 @@ class GameState:
             self.game_update['topInningScore'] = 0
             self.game_update['bottomInningScore'] = 0
             self.game_update['halfInningScore'] = 0
+
+        # If the half ends and it wasn't the batter's out, the batter count is
+        # decreased because I guess the at bat doesn't count. This is observably
+        # different from not incrementing the count when the next at-bat starts
+        if not for_batter:
+            self.game_update[self.prefix() + 'TeamBatterCount'] -= 1
+            # Next time a batter comes up, call the same one
+            self.batting_team().batter_index -= 1
 
         self.expects_batter_up = False
         if (self.game_update['inning'] >= 8 and
@@ -633,20 +641,31 @@ class GameState:
     def update_home_run(self, feed_event: dict, _: Optional[dict]):
         assert self.expects_pitch
 
-        batter = self.batter()
+        parsed = Parsers.home_run.parse(feed_event['description'])
+        (parsed_hr, *parsed_rest) = parsed.children
+        batter_name, parsed_hr_type = parsed_hr.children
 
-        runs_scored = self._score_runs(1)
-        while self.game_update['baserunnerCount'] > 0:
+        if parsed_hr_type.data == 'solo_hr':
+            num_scores = 1
+        else:
+            assert parsed_hr_type.data == 'multi_hr'
+            num_scores_str, = parsed_hr_type.children
+            num_scores = int(num_scores_str)
+
+        self._apply_scoring_extras(parsed_rest, batter_name)
+
+        # Remove baserunners after applying scoring extras so it knows who the
+        # baserunners were
+        for _ in range(num_scores - 1):
             self._remove_baserunner_by_index(0)
-            runs_scored += self._score_runs(1)
 
-        run_desc = "solo" if runs_scored == 1 else f"{runs_scored}-run"
-        description = f"{batter.name} hits a {run_desc} home run!"
+        # Home runs should clear the bases
+        assert len(self.game_update['baseRunners']) == 0
 
-        assert feed_event['description'] == description
-        self.game_update['lastUpdate'] = description
+        self.game_update['lastUpdate'] = feed_event['description']
 
-        self._record_runs(runs_scored)
+        self._score_runs(num_scores)
+        self._record_runs(num_scores)
         self._end_atbat()
 
     def update_hit(self, feed_event: dict, game_update: Optional[dict]):
@@ -673,9 +692,10 @@ class GameState:
             assert parsed_item.data in {'score', 'sacrifice'}
 
             scoring_player_name, *parsed_extras = parsed_item.children
-            runs_scored += self._score_player(scoring_player_name)
 
+            # Apply extras first so the baserunners arrays are intact
             self._apply_scoring_extras(parsed_extras, scoring_player_name)
+            runs_scored += self._score_player(scoring_player_name)
         self._record_runs(runs_scored)
 
     def _apply_scoring_extras(self, parsed_extras, scoring_player_name):
@@ -685,9 +705,9 @@ class GameState:
             assert parsed_name == parsed_name2
             # Free refill can be used by the runner or the scoring player or, if
             # the stars align, the pitcher
-            assert (parsed_name == scoring_player_name or
+            assert (parsed_name == self.batter().name or
                     parsed_name == self.fielding_team().pitcher.name or
-                    parsed_name == self.batter().name)
+                    parsed_name in self.game_update['baseRunnerNames'])
 
             self.game_update['halfInningOuts'] -= 1
 
