@@ -1,7 +1,8 @@
-start: hit (_N score)*
+start: hit (_N heating_up)? (_N score)*
 
 hit: NAME " hits a " HIT_TYPE "!"
 
+heating_up: NAME " is Heating Up!"
 
 HIT_TYPE: "Single"
         | "Double"

@@ -721,6 +721,10 @@ class GameState:
         (parsed_hit, *parsed_rest) = parsed.children
         batter_name, base_name = parsed_hit.children
 
+        if parsed_rest and parsed_rest[0].data == 'heating_up':
+            heating_up_name, = parsed_rest.pop(0).children
+            assert heating_up_name == batter_name
+
         batter = self.batter()
         assert batter_name == batter.name
 
