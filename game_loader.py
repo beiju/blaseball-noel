@@ -47,6 +47,14 @@ def get_game(tester, game_id):
                 lambda u: u['data']['lastUpdate'] != '', game_updates))
             if len(filtered_updates) == 1:
                 game_update = filtered_updates[0]['data']
+            elif len(filtered_updates) == 2 and (
+                    filtered_updates[0]['data']['finalized'] !=
+                    filtered_updates[1]['data']['finalized']):
+                # Use the finalized one
+                if filtered_updates[0]['data']['finalized']:
+                    game_update = filtered_updates[0]['data']
+                else:
+                    game_update = filtered_updates[1]['data']
             else:
                 raise RuntimeError("Can't choose which game update to use")
         generated_update = game.update(feed_event, game_update)
