@@ -378,6 +378,9 @@ class GameState:
         assert feed_event['description'] == description
         self.game_update['lastUpdate'] = description
 
+        self._update_walk_generic(batter)
+
+    def _update_walk_generic(self, batter):
         self._player_to_base(batter, 0)  # Until the Beams get here
         self._end_atbat()
 
@@ -529,6 +532,33 @@ class GameState:
         assert self.game_update['atBatStrikes'] > 0
         self.game_update['atBatStrikes'] -= 1
 
+    def update_mild_pitch(self, feed_event: dict, _: Optional[dict]):
+        assert self.expects_pitch
+
+        parsed = Parsers.mild_pitch.parse(feed_event['description'])
+        (mild_pitch, parsed_pitch, *parsed_rest) = parsed.children
+
+        assert mild_pitch.data == 'mild_pitch'
+        mild_pitcher_name, = mild_pitch.children
+        assert mild_pitcher_name == self.fielding_team().pitcher.name
+
+        if parsed_pitch.data == 'ball':
+            parsed_balls, parsed_strikes = parsed_pitch.children
+            self.game_update['atBatBalls'] += 1
+            assert self.game_update['atBatBalls'] == int(parsed_balls)
+            assert self.game_update['atBatStrikes'] == int(parsed_strikes)
+        else:
+            assert parsed_pitch.data == 'walk'
+            parsed_walker, = parsed_pitch.children
+            batter = self.batter()
+            assert parsed_walker == batter.name
+            self._update_walk_generic(batter)
+
+        # Everything else should be a score
+        self._update_scores(parsed_rest)
+
+        self.game_update['lastUpdate'] = feed_event['description']
+
     def update_strike(self, feed_event: dict, _: Optional[dict]):
         assert self.expects_pitch
 
@@ -578,6 +608,15 @@ class GameState:
         batter = self.batter()
         assert batter_name == batter.name
 
+        self._update_scores(parsed_rest)
+
+        self.game_update['lastUpdate'] = feed_event['description']
+        self._player_to_base(batter, BASE_NUM_FOR_HIT[base_name])
+        self._end_atbat()
+        # This must be last or it errors when this event ends the half-inning
+        self._maybe_advance_baserunners(game_update)
+
+    def _update_scores(self, parsed_rest):
         runs_scored = 0
         for parsed_item in parsed_rest:
             assert parsed_item.data == 'score'
@@ -586,13 +625,7 @@ class GameState:
             runs_scored += self._score_player(scoring_player_name)
 
             self._apply_scoring_extras(parsed_extras, scoring_player_name)
-
         self._record_runs(runs_scored)
-        self.game_update['lastUpdate'] = feed_event['description']
-        self._player_to_base(batter, BASE_NUM_FOR_HIT[base_name])
-        self._end_atbat()
-        # This must be last or it errors when this event ends the half-inning
-        self._maybe_advance_baserunners(game_update)
 
     def _apply_scoring_extras(self, parsed_extras, scoring_player_name):
         for parsed_sub_item in parsed_extras:
@@ -617,7 +650,7 @@ class GameState:
 
     def update_game_score(self, feed_event: dict, _: Optional[dict]):
         assert self.expects_game_end
-        
+
         away_text = f"{self.away.nickname} {self.game_update['awayScore']}"
         home_text = f"{self.home.nickname} {self.game_update['homeScore']}"
         if self.game_update['homeScore'] > self.game_update['awayScore']:
@@ -726,6 +759,7 @@ GameState.update_type = {
     14: GameState.update_ball,
     15: GameState.update_foul_ball,
     25: GameState.update_strike_zapped,
+    27: GameState.update_mild_pitch,
     28: GameState.update_inning_end,
     73: GameState.update_flavor_text,
 }

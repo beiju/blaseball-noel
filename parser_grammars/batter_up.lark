@@ -6,5 +6,5 @@ batter_up: NAME " batting for the " NAME
 
 wielding: ", wielding " NAME
 
-%import .blaseball_common.NAME
-%import .blaseball_common._N
+%import .blaseball.NAME
+%import .blaseball._N

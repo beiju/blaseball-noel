@@ -1,0 +1,13 @@
+start: mild_pitch _N (ball | walk) (_N pathetic_play (_N score)?)?
+
+mild_pitch: NAME " throws a Mild pitch!"
+ball: "Ball, " INT "-" INT "."
+walk: NAME "draws a walk." // TODO Scoring on walks
+pathetic_play: "Runners advance on the pathetic play!"
+
+%import common.INT
+%import .blaseball.NAME
+%import .blaseball._N
+%import .blaseball.score
+// Need to update things used inside score or their names get prepended
+%import .blaseball.use_free_refill

@@ -13,6 +13,6 @@ sacrifice: NAME " advances on the sacrifice." (_N use_free_refill)?
 BASE: "first" | "second" | "third" | "fourth" | "fifth"
 
 
-%import .blaseball_common.NAME
-%import .blaseball_common._N
-%import .blaseball_common.use_free_refill
+%import .blaseball.NAME
+%import .blaseball._N
+%import .blaseball.use_free_refill

@@ -1,3 +1,6 @@
+// This is the common file. Not naming it common to avoid confusion with the
+// built-in common.
+
 NAME: (NAME_PART | PUNCTUATION | " ")+
 
 // Any non-whitespace sequence
@@ -8,6 +11,7 @@ PUNCTUATION: /[.,]/
 // shorter while we're at it
 _N: NEWLINE
 
+score: NAME " scores!" (_N use_free_refill)?
 use_free_refill: NAME " used their Free Refill." _N NAME " Refills the In!"
 
 %import common.NEWLINE
