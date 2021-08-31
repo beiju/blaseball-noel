@@ -511,10 +511,13 @@ class GameState:
             runner_out, base_name = parsed_out.children
             batter_name, = parsed_reaches.children
 
-            base_i = self.game_update['baseRunnerNames'].index(runner_out)
-            self.game_update['baseRunners'][base_i] = batter.id
-            self.game_update['baseRunnerNames'][base_i] = batter.name
-            self.game_update['baseRunnerMods'][base_i] = show_runner_mod(batter)
+            # This will break when the same runner is on base multiple times.
+            # Examine base_name to fix that
+            runner_i = self.game_update['baseRunnerNames'].index(runner_out)
+            self._remove_baserunner_by_index(runner_i)
+            # I don't think you can know where the batter ends up. Rely on
+            # baserunner advancement correction to fix it.
+            self._player_to_base(batter, 0)
 
         assert batter_name == batter.name
 
