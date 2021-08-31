@@ -1,6 +1,7 @@
 from dataclasses import dataclass
+from functools import partial
 from itertools import chain
-from typing import Dict, Callable, Optional, List
+from typing import Dict, Callable, Optional, List, Set
 from blaseball_mike.models import Team, Player
 import logging
 
@@ -20,22 +21,16 @@ BASE_NUM_FOR_NAME = {
     'fourth': 3,
 }
 
-DISPLAYED_MODS = {'COFFEE_RALLY'}
-
-
-def mod_for_player(player):
-    for mod in chain(player.perm_attr, player.seas_attr,
-                     player.game_attr, player.item_attr):
-        if mod.id in DISPLAYED_MODS:
-            return mod.id
-    return ""
+PITCHER_MOD_ORDER = ['COFFEE_RALLY']
+BATTER_MOD_ORDER = ['COFFEE_RALLY']
+BASERUNNER_MOD_ORDER = ['BLASERUNNING', 'COFFEE_RALLY']
 
 
 @dataclass
 class PlayerState:
     id: str
     name: str
-    mod: str
+    mods: Set[str]
     legacy_item: Optional[str]
 
     @classmethod
@@ -46,7 +41,7 @@ class PlayerState:
 
         return PlayerState(id=player.id,
                            name=player.name,
-                           mod=mod_for_player(player),
+                           mods=set(mods_for_player(player)),
                            legacy_item=legacy_item)
 
 
@@ -65,8 +60,10 @@ class TeamState:
         self.pitcher = PlayerState(
             id=first_truthy(updates, prefix + 'Pitcher'),
             name=first_truthy(updates, prefix + 'PitcherName'),
-            mod=first_truthy(updates, prefix + 'PitcherMod') or '',
-            legacy_item='')  # Pitchers may have items but they're not displayed
+            mods={update['data'][prefix + 'PitcherMod'] for update in updates
+                  if update['data'][prefix + 'PitcherMod'] != ''},
+            # Pitchers may have legacy items but they're never displayed
+            legacy_item='')
         assert self.pitcher.id
         assert self.pitcher.name
 
@@ -84,6 +81,28 @@ def first_truthy(updates, key):
     for update in updates:
         if update['data'][key]:
             return update['data'][key]
+
+
+def mods_for_player(player):
+    for mod in chain(player.perm_attr, player.seas_attr,
+                     player.game_attr, player.item_attr):
+        yield mod.id
+
+    # Yield mod from legacy items
+    if player.bat.attr:
+        yield player.bat.attr.id
+
+
+def show_mod_from_list(mod_list: List[str], player: PlayerState):
+    for mod in mod_list:
+        if mod in player.mods:
+            return mod
+    return ''
+
+
+show_pitcher_mod = partial(show_mod_from_list, PITCHER_MOD_ORDER)
+show_batter_mod = partial(show_mod_from_list, BATTER_MOD_ORDER)
+show_runner_mod = partial(show_mod_from_list, BASERUNNER_MOD_ORDER)
 
 
 class GameState:
@@ -238,11 +257,11 @@ class GameState:
         self.game_update['phase'] = 1
         self.game_update['awayPitcher'] = self.away.pitcher.id
         self.game_update['awayPitcherName'] = self.away.pitcher.name
-        self.game_update['awayPitcherMod'] = self.away.pitcher.mod
+        self.game_update['awayPitcherMod'] = show_pitcher_mod(self.away.pitcher)
         self.game_update['awayTeamBatterCount'] = -1
         self.game_update['homePitcher'] = self.home.pitcher.id
         self.game_update['homePitcherName'] = self.home.pitcher.name
-        self.game_update['homePitcherMod'] = self.home.pitcher.mod
+        self.game_update['homePitcherMod'] = show_pitcher_mod(self.home.pitcher)
         self.game_update['homeTeamBatterCount'] = -1
 
     def update_play_ball(self, feed_event: dict, _: Optional[dict]):
@@ -334,7 +353,7 @@ class GameState:
         prefix = self.prefix()
         self.game_update[prefix + 'Batter'] = batter.id
         self.game_update[prefix + 'BatterName'] = batter.name
-        self.game_update[prefix + 'BatterMod'] = batter.mod
+        self.game_update[prefix + 'BatterMod'] = show_batter_mod(batter)
 
         self.game_update['lastUpdate'] = feed_event['description']
         self.game_update[prefix + 'TeamBatterCount'] += 1
@@ -351,18 +370,31 @@ class GameState:
         stealer_name, base_name = parsed_steal.children
         base_stolen = BASE_NUM_FOR_NAME[base_name]
         # Find the baserunner who is one before the base they tried to
-        # steal. You can't steal to any other base (not with this message)
+        # steal. You can't steal to any other base (with this event type)
         stealer_idx = self.game_update['basesOccupied'].index(base_stolen - 1)
         assert self.game_update['baseRunnerNames'][stealer_idx] == stealer_name
 
         runs_scored = 0
         if parsed_steal.data == 'stolen_base':
+            # Must do this before advancing baserunners or the indices are off
+            self.game_update['basesOccupied'][stealer_idx] += 1
+            expects_extras = False
+
+            if parsed_extras and parsed_extras[0].data == 'blaserunning':
+                parsed_blaserunning = parsed_extras.pop(0)
+                parsed_blaserunner_name, = parsed_blaserunning.children
+                assert stealer_name == parsed_blaserunner_name
+                runs_scored += self._score_runs(0.2)
+                expects_extras = True
+
             if base_stolen + 1 == self.game_update[self.prefix() + 'Bases']:
-                runs_scored = self._score_player(stealer_name)
+                runs_scored += self._score_player(stealer_name)
+                expects_extras = True
+
+            if expects_extras:
                 self._apply_scoring_extras(parsed_extras, stealer_name)
             else:
                 assert len(parsed_extras) == 0
-                self.game_update['basesOccupied'][stealer_idx] += 1
         else:
             assert parsed_steal.data == 'caught_stealing'
 
@@ -453,7 +485,7 @@ class GameState:
             base_i = self.game_update['baseRunnerNames'].index(runner_out)
             self.game_update['baseRunners'][base_i] = batter.id
             self.game_update['baseRunnerNames'][base_i] = batter.name
-            self.game_update['baseRunnerMods'][base_i] = batter.mod
+            self.game_update['baseRunnerMods'][base_i] = show_runner_mod(batter)
 
         assert batter_name == batter.name
 
@@ -479,7 +511,7 @@ class GameState:
                 self.game_update[self.prefix() + 'Outs']):
             self._end_half_inning()
         elif for_batter:
-            # Only end the at bat if the out belongs to the batter. Which it
+            # Only end the at bat if the out belongs to the runner. Which it
             # usually does, but not for e.g. caught stealing.
             self._end_atbat()
 
@@ -651,7 +683,7 @@ class GameState:
             assert parsed_sub_item.data == 'use_free_refill'
             parsed_name, parsed_name2 = parsed_sub_item.children
             assert parsed_name == parsed_name2
-            # Free refill can be used by the batter or the scoring player or, if
+            # Free refill can be used by the runner or the scoring player or, if
             # the stars align, the pitcher
             assert (parsed_name == scoring_player_name or
                     parsed_name == self.fielding_team().pitcher.name or
@@ -661,24 +693,35 @@ class GameState:
 
             # Need to clear mod from the scoring player
             if (self.fielding_team().pitcher.name == parsed_name and
-                    self.fielding_team().pitcher.mod == 'COFFEE_RALLY'):
-                self.fielding_team().pitcher.mod = ''
-                prefix = self.prefix(negate=True)
-                assert self.game_update[prefix + 'PitcherMod'] == 'COFFEE_RALLY'
-                self.game_update[prefix + 'PitcherMod'] = ''
+                    'COFFEE_RALLY' in self.fielding_team().pitcher.mods):
+                self.fielding_team().pitcher.mods.remove('COFFEE_RALLY')
+                self.game_update[self.prefix(negate=True) + 'PitcherMod'] = \
+                    show_pitcher_mod(self.fielding_team().pitcher)
             else:
                 possible_refillers = [p for p in self.batting_team().lineup
                                       if (p.name == parsed_name and
-                                          p.mod == 'COFFEE_RALLY')]
+                                          'COFFEE_RALLY' in p.mods)]
 
                 # If this assertion fails it's because there are two players
                 # with the same name and I need to figure out which one used
                 # their free refill
                 assert len(possible_refillers) == 1
 
-                # This is gonna break if removing the free refill is supposed to
-                # reveal another mod in its place
-                possible_refillers[0].mod = ''
+                # This throws if it's not in the set, which is what we want
+                refiller = possible_refillers[0]
+                refiller.mods.remove('COFFEE_RALLY')
+
+                # Clear from this player if they're the batter
+                if self.batter().id == refiller.id:
+                    self.game_update[self.prefix() + 'BatterMod'] = \
+                        show_batter_mod(refiller)
+
+                # Clear from any instances of this player who are on base
+                for runner_i, runner_id in \
+                        enumerate(self.game_update['baseRunners']):
+                    if runner_id == refiller.id:
+                        self.game_update['baseRunnerMods'][runner_i] = \
+                            show_runner_mod(refiller)
 
     def update_game_score(self, feed_event: dict, _: Optional[dict]):
         assert self.expects_game_end
@@ -730,7 +773,7 @@ class GameState:
 
         self.game_update['baseRunners'].append(batter.id)
         self.game_update['baseRunnerNames'].append(batter.name)
-        self.game_update['baseRunnerMods'].append(batter.mod)
+        self.game_update['baseRunnerMods'].append(show_runner_mod(batter))
         self.game_update['basesOccupied'].append(base_num)
         self.game_update['baserunnerCount'] += 1
 
