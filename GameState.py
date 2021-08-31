@@ -861,6 +861,35 @@ class GameState:
         # Don't do anything about scoring players -- that should be parsed
         # separately
 
+    def update_blooddrain(self, feed_event: dict, _: Optional[dict]):
+        assert self.expects_pitch  # we'll see if this holds
+
+        parsed = Parsers.blooddrain.parse(feed_event['description'])
+
+        if parsed.data == 'siphon':
+            siphon_target, siphon_action = parsed.children
+            (sipper_name, sipper_name2,
+             sippee_name, sip_category) = siphon_target.children
+            assert sipper_name == sipper_name2
+            # I could assert that the sipper and sippee are on the teams, but I
+            # don't want to
+
+            if siphon_action.data == 'blooddrain_strike':
+                sipper_name3, = siphon_action.children
+                assert sipper_name == sipper_name3
+
+                self.game_update['atBatStrikes'] += 1
+
+                # This can't be the strike that ends the inning... right?
+                assert (self.game_update['atBatStrikes'] <
+                        self.game_update[self.prefix() + 'Strikes'])
+            else:
+                assert False  # other blooddrain actions are TODO
+        else:
+            assert False  # Non-siphon blooddrains are TODO
+
+        self.game_update['lastUpdate'] = feed_event['description']
+
     def update_inning_end(self, feed_event: dict, _: Optional[dict]):
         assert self.expects_inning_end
 
@@ -916,6 +945,7 @@ GameState.update_type = {
     25: GameState.update_strike_zapped,
     27: GameState.update_mild_pitch,
     28: GameState.update_inning_end,
+    52: GameState.update_blooddrain,
     73: GameState.update_no_state_change_pitch,  # Peanut flavor text
     92: GameState.update_no_state_change_batter_up,  # Superyummy
 }

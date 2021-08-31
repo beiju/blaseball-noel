@@ -17,6 +17,7 @@ class Parsers:
     fielding_out = _make_parser('fielding_out')
     mild_pitch = _make_parser('mild_pitch')
     strikeout = _make_parser('strikeout')
+    blooddrain = _make_parser('blooddrain')
 
     def __init__(self):
         raise RuntimeError("This class should not be instantiated")

@@ -1,0 +1,16 @@
+?start: blooddrain | siphon
+
+blooddrain: "TODO"
+
+siphon: _gurgle _N siphon_target _N (blooddrain_strike)
+siphon_target: _siphon_activates _N _blooddrain_target
+
+_gurgle: "The Blooddrain gurgled!"
+_siphon_activates: NAME "'s Siphon activates!"
+_blooddrain_target: NAME " siphoned some of " NAME "'s " ATTRIBUTE_CATEGORY " ability!"
+blooddrain_strike: NAME " adds a Strike!"
+
+ATTRIBUTE_CATEGORY: "pitching" | "hitting" | "baserunning" | "defense"
+
+%import .blaseball.NAME
+%import .blaseball._N
