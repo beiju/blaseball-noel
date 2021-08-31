@@ -346,7 +346,9 @@ class GameState:
         assert self.expects_pitch
 
         parsed = Parsers.steal.parse(feed_event['description'])
-        stealer_name, base_name = parsed.children
+        parsed_steal, *parsed_extras = parsed.children
+        assert parsed_steal.data in {'stolen_base', 'caught_stealing'}
+        stealer_name, base_name = parsed_steal.children
         base_stolen = BASE_NUM_FOR_NAME[base_name]
         # Find the baserunner who is one before the base they tried to
         # steal. You can't steal to any other base (not with this message)
@@ -354,14 +356,15 @@ class GameState:
         assert self.game_update['baseRunnerNames'][stealer_idx] == stealer_name
 
         runs_scored = 0
-        if parsed.data == 'stolen_base':
+        if parsed_steal.data == 'stolen_base':
             if base_stolen + 1 == self.game_update[self.prefix() + 'Bases']:
-                runs_scored = self._score_player(
-                    self.game_update['baseRunnerNames'][stealer_idx])
+                runs_scored = self._score_player(stealer_name)
+                self._apply_scoring_extras(parsed_extras, stealer_name)
             else:
+                assert len(parsed_extras) == 0
                 self.game_update['basesOccupied'][stealer_idx] += 1
         else:
-            assert parsed.data == 'caught_stealing'
+            assert parsed_steal.data == 'caught_stealing'
 
             self._remove_baserunner_by_index(stealer_idx)
             self._update_out(for_batter=False)
@@ -410,16 +413,40 @@ class GameState:
         assert self.expects_pitch
 
         parsed = Parsers.fielding_out.parse(feed_event['description'])
-        (parsed_out, *parsed_rest) = parsed.children
 
         batter = self.batter()
-        if parsed_out.data == 'ground_out' or parsed_out.data == 'flyout':
+        if parsed.data == 'ground_out_full' or parsed.data == 'flyout_full':
+            parsed_out, *parsed_scores = parsed.children
             batter_name, fielder = parsed_out.children
             assert any(fielder == defender.name
                        for defender in self.fielding_team().lineup)
+        elif parsed.data == 'double_play_full':
+            parsed_out, *parsed_scores = parsed.children
+            batter_name, = parsed_out.children
+
+            # The first out of a double play can't be the out that ends the
+            # inning... right?
+            self.game_update['halfInningOuts'] += 1
+            assert (self.game_update['halfInningOuts'] <
+                    self.game_update[self.prefix() + 'Outs'])
+
+            # Need to update scoring players early so we can tell who got out
+            self._update_scores(parsed_scores)
+            parsed_scores = []
+
+            # Have to figure out which baserunner gets out. I suppose you could
+            # deduce it sometimes from future events but for now I require the
+            # game update
+            assert game_update is not None
+            set_diff = (set(self.game_update['baseRunners']) -
+                        set(game_update['baseRunners']))
+            assert len(set_diff) == 1
+            batter_out_id = set_diff.pop()
+            batter_out_i = self.game_update['baseRunners'].index(batter_out_id)
+            self._remove_baserunner_by_index(batter_out_i)
         else:
-            assert parsed_out.data == 'fielders_choice'
-            (parsed_out, parsed_reaches) = parsed_out.children
+            assert parsed.data == 'fielders_choice'
+            (parsed_out, *parsed_scores, parsed_reaches) = parsed.children
             runner_out, base_name = parsed_out.children
             batter_name, = parsed_reaches.children
 
@@ -430,15 +457,7 @@ class GameState:
 
         assert batter_name == batter.name
 
-        runs_scored = 0
-        for parsed_item in parsed_rest:
-            assert parsed_item.data == 'sacrifice'
-            advanced_batter, *parsed_extras = parsed_item.children
-            runs_scored += self._score_player(advanced_batter)
-
-            self._apply_scoring_extras(parsed_extras, advanced_batter)
-
-        self._record_runs(runs_scored)
+        self._update_scores(parsed_scores)
         self.game_update['lastUpdate'] = feed_event['description']
 
         self._update_out()
@@ -619,7 +638,7 @@ class GameState:
     def _update_scores(self, parsed_rest):
         runs_scored = 0
         for parsed_item in parsed_rest:
-            assert parsed_item.data == 'score'
+            assert parsed_item.data in {'score', 'sacrifice'}
 
             scoring_player_name, *parsed_extras = parsed_item.children
             runs_scored += self._score_player(scoring_player_name)
@@ -630,23 +649,36 @@ class GameState:
     def _apply_scoring_extras(self, parsed_extras, scoring_player_name):
         for parsed_sub_item in parsed_extras:
             assert parsed_sub_item.data == 'use_free_refill'
-            parsed_name1, parsed_name2 = parsed_sub_item.children
-            assert parsed_name1 == scoring_player_name
-            assert parsed_name2 == scoring_player_name
+            parsed_name, parsed_name2 = parsed_sub_item.children
+            assert parsed_name == parsed_name2
+            # Free refill can be used by the batter or the scoring player or, if
+            # the stars align, the pitcher
+            assert (parsed_name == scoring_player_name or
+                    parsed_name == self.fielding_team().pitcher.name or
+                    parsed_name == self.batter().name)
 
             self.game_update['halfInningOuts'] -= 1
 
             # Need to clear mod from the scoring player
-            possible_scorers = [p for p in self.batting_team().lineup
-                                if p.name == scoring_player_name]
+            if (self.fielding_team().pitcher.name == parsed_name and
+                    self.fielding_team().pitcher.mod == 'COFFEE_RALLY'):
+                self.fielding_team().pitcher.mod = ''
+                prefix = self.prefix(negate=True)
+                assert self.game_update[prefix + 'PitcherMod'] == 'COFFEE_RALLY'
+                self.game_update[prefix + 'PitcherMod'] = ''
+            else:
+                possible_refillers = [p for p in self.batting_team().lineup
+                                      if (p.name == parsed_name and
+                                          p.mod == 'COFFEE_RALLY')]
 
-            # If this assertion fails it's because there are two players
-            # with the same name and I need to figure out which one scored
-            assert len(possible_scorers) == 1
+                # If this assertion fails it's because there are two players
+                # with the same name and I need to figure out which one used
+                # their free refill
+                assert len(possible_refillers) == 1
 
-            # This is gonna break if removing the free refill is supposed to
-            # reveal another mod in its place
-            possible_scorers[0].mod = ''
+                # This is gonna break if removing the free refill is supposed to
+                # reveal another mod in its place
+                possible_refillers[0].mod = ''
 
     def update_game_score(self, feed_event: dict, _: Optional[dict]):
         assert self.expects_game_end

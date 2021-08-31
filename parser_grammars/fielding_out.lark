@@ -1,9 +1,15 @@
-start: (flyout | ground_out | fielders_choice) (_N sacrifice)*
+?start: (flyout_full | ground_out_full | fielders_choice | double_play_full)
 
-ground_out: NAME " hit a ground out to " NAME "."
+flyout_full: flyout (_N sacrifice)*
 flyout: NAME " hit a flyout to " NAME "."
 
-fielders_choice: runner_out _N batter_reaches
+ground_out_full: ground_out (_N sacrifice)*
+ground_out: NAME " hit a ground out to " NAME "."
+
+double_play_full: double_play (_N score)*
+double_play: NAME " hit into a double play!"
+
+fielders_choice: runner_out (_N score)* _N batter_reaches
 runner_out: NAME " out at " BASE " base."
 batter_reaches: NAME " reaches on fielder's choice."
 
@@ -15,4 +21,5 @@ BASE: "first" | "second" | "third" | "fourth" | "fifth"
 
 %import .blaseball.NAME
 %import .blaseball._N
+%import .blaseball.score
 %import .blaseball.use_free_refill

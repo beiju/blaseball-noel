@@ -1,4 +1,4 @@
-?start: stolen_base | caught_stealing
+start: stolen_base (_N use_free_refill)? | caught_stealing
 
 stolen_base: NAME " steals " BASE " base!"
 
@@ -7,3 +7,5 @@ caught_stealing: NAME " gets caught stealing " BASE " base."
 BASE: "first" | "second" | "third" | "fourth" | "fifth"
 
 %import .blaseball.NAME
+%import .blaseball._N
+%import .blaseball.use_free_refill
