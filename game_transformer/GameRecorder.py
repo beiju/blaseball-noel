@@ -39,6 +39,7 @@ SIMPLE_PITCH_TYPES = {
     9: PitchType.HOME_RUN,
     14: PitchType.BALL,
     15: PitchType.FOUL,
+    27: PitchType.BALL,  # mild pitch -> ball
 }
 NON_PITCH_TYPES = {
     0,  # let's go
@@ -127,17 +128,28 @@ class GameRecorder:
         # Figure out whether the batter actually advanced
         assert self.team.batter().name != self.team.next_batter().name
 
+        expected_desc = (f"{self.team.next_batter().name} batting for the "
+                         f"{self.team.nickname}")
+        if feed_event['description'].startswith(expected_desc):
+            # Regular advancement
+            self.team.advance_batter()
+            return
+
         expected_desc = (f"{self.team.batter().name} batting for the "
                          f"{self.team.nickname}")
         if feed_event['description'].startswith(expected_desc):
             # No advancement
             return
 
-        expected_desc = (f"{self.team.next_batter().name} batting for the "
-                         f"{self.team.nickname}")
-        if feed_event['description'].startswith(expected_desc):
-            # Regular advancement
+        expected_desc = f"is Inhabiting {self.team.next_batter().name}!"
+        if expected_desc in feed_event['description']:
+            # Regular advancement + haunting
             self.team.advance_batter()
+            return
+
+        expected_desc = f"is Inhabiting {self.team.batter().name}!"
+        if expected_desc in feed_event['description']:
+            # No advancement + haunting
             return
 
         raise RuntimeError("Who is batting?")
