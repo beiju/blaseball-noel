@@ -68,9 +68,12 @@ def get_pitch_type(feed_event: Dict[str, Any]):
     elif event_type == 6:
         if " strikes out looking." in description:
             return PitchType.STRIKE_LOOKING
-        else:
-            assert " strikes out swinging." in description
+        elif " strikes out swinging." in description:
             return PitchType.STRIKE_SWINGING
+        else:
+            assert ("charmed" in description and
+                    "strike out willingly" in description)
+            return None  # Fill this with random pitches
     elif event_type == 10:
         if " hits a Single!" in description:
             return PitchType.SINGLE
