@@ -1,116 +1,17 @@
-from dataclasses import dataclass
-from functools import partial
-from itertools import chain
-from typing import Dict, Callable, Optional, List, Set
-from blaseball_mike.models import Team, Player
-import logging
+from typing import Dict, Callable, Optional, List
 
-from parsers import Parsers
+from blaseball_mike.models import Player
 
-BASE_NUM_FOR_HIT = {
-    'Single': 0,
-    'Double': 1,
-    'Triple': 2,
-    'Quadruple': 3,
-}
-
-BASE_NUM_FOR_NAME = {
-    'first': 0,
-    'second': 1,
-    'third': 2,
-    'fourth': 3,
-}
-
-PITCHER_MOD_ORDER = ['COFFEE_RALLY']
-BATTER_MOD_ORDER = ['COFFEE_RALLY']
-BASERUNNER_MOD_ORDER = ['BLASERUNNING', 'COFFEE_RALLY']
+from game_transformer.GameRecorder import GameRecorder, PitchType
+from game_transformer.state import PlayerState, TeamState, first_truthy
 
 
-@dataclass
-class PlayerState:
-    id: str
-    name: str
-    mods: Set[str]
-    legacy_item: Optional[str]
-
-    @classmethod
-    def from_player(cls, player: Player):
-        legacy_item = None
-        if player.bat.id:  # `bat` is truthy even if player doesn't have one
-            legacy_item = player.bat.name
-
-        return PlayerState(id=player.id,
-                           name=player.name,
-                           mods=set(mods_for_player(player)),
-                           legacy_item=legacy_item)
-
-
-@dataclass
-class TeamState:
-    nickname: str
-    pitcher: PlayerState
-    lineup: List[PlayerState]
-    batter_index: int
-
-    def __init__(self, updates: List[dict], timestamp: str, prefix: str):
-        team = Team.load_at_time(first_truthy(updates, prefix + 'Team'),
-                                 timestamp)
-        self.nickname = team.get_nickname()
-
-        self.pitcher = PlayerState(
-            id=first_truthy(updates, prefix + 'Pitcher'),
-            name=first_truthy(updates, prefix + 'PitcherName'),
-            mods={update['data'][prefix + 'PitcherMod'] for update in updates
-                  if update['data'][prefix + 'PitcherMod'] != ''},
-            # Pitchers may have legacy items but they're never displayed
-            legacy_item='')
-        assert self.pitcher.id
-        assert self.pitcher.name
-
-        self.lineup = [PlayerState.from_player(p) for p in team.lineup]
-
-        self.batter_index = -1
-
-    def advance_batter(self):
-        self.batter_index += 1
-        if self.batter_index >= len(self.lineup):
-            self.batter_index = 0
-
-
-def first_truthy(updates, key):
-    for update in updates:
-        if update['data'][key]:
-            return update['data'][key]
-
-
-def mods_for_player(player):
-    for mod in chain(player.perm_attr, player.seas_attr,
-                     player.game_attr, player.item_attr):
-        yield mod.id
-
-    # Yield mod from legacy items
-    if player.bat.attr:
-        yield player.bat.attr.id
-
-
-def show_mod_from_list(mod_list: List[str], player: PlayerState):
-    for mod in mod_list:
-        if mod in player.mods:
-            return mod
-    return ''
-
-
-show_pitcher_mod = partial(show_mod_from_list, PITCHER_MOD_ORDER)
-show_batter_mod = partial(show_mod_from_list, BATTER_MOD_ORDER)
-show_runner_mod = partial(show_mod_from_list, BASERUNNER_MOD_ORDER)
-
-
-class GameState:
-    UpdateFunction = Callable[['GameState', dict, Optional[dict]], dict]
+class GameProducer:
+    UpdateFunction = Callable[['GameProducer', dict, Optional[dict]], dict]
     update_type: Dict[int, UpdateFunction] = {}
 
-    def __init__(self, updates: List[dict]):
-        self.log = logging.getLogger("TEST")
+    def __init__(self, updates: List[dict], home_recorder: GameRecorder,
+                 away_recorder: GameRecorder):
         self.expects_lets_go = True
         self.expects_play_ball = False
         self.expects_half_inning_start = False
@@ -119,15 +20,17 @@ class GameState:
         self.expects_inning_end = False
         self.expects_game_end = False
 
-        self.expects_reverberate = {'home': False, 'away': False}
+        self.home_recorder = home_recorder
+        self.away_recorder = away_recorder
 
         # Updates with play count 0 have the wrong timestamp
         time_update = next(u for u in updates if u['data']['playCount'] > 0)
 
         # Chronicler adds timestamp so I can depend on it existing
-        self.away = TeamState(updates, time_update['timestamp'], 'away')
         self.home = TeamState(updates, time_update['timestamp'], 'home')
-        self.haunter = None
+        self.away = TeamState(updates, time_update['timestamp'], 'away')
+
+        self.active_pitch_source = None
 
         self.game_update = {
             'id': updates[0]['data']['id'],
@@ -225,8 +128,6 @@ class GameState:
             return 'bottom'
 
     def batter(self) -> PlayerState:
-        if self.haunter:
-            return self.haunter
         team_state = self.batting_team()
         return team_state.lineup[team_state.batter_index]
 
@@ -236,25 +137,32 @@ class GameState:
     def fielding_team(self) -> TeamState:
         return self.home if self.game_update['topOfInning'] else self.away
 
-    def update(self, feed_event, game_update):
-        print("type", f"{feed_event['type']},".ljust(4),
-              feed_event['description'].replace("\n", "\n          "))
+    def __iter__(self):
+        return self
 
-        # Always reset this, since scores are rare
-        self.game_update['scoreUpdate'] = ""
-        update_func = GameState.update_type[feed_event['type']]
-        returned = update_func(self, feed_event, game_update)
-
-        if returned is not None:
-            return returned
+    def __next__(self):
+        override_return = None
+        if self.expects_lets_go:
+            self._lets_go()
+        elif self.expects_play_ball:
+            override_return = self._play_ball()
+        elif self.expects_half_inning_start:
+            self._half_inning_start()
+        elif self.expects_batter_up:
+            self._batter_up()
+        elif self.expects_pitch:
+            self._pitch()
+        else:
+            raise RuntimeError("Unexpected state in GameProducer")
 
         self.game_update['playCount'] += 1
 
+        if override_return is not None:
+            return override_return
+
         return self.game_update
 
-    def update_lets_go(self, feed_event: dict, _: Optional[dict]):
-        assert self.expects_lets_go
-        assert feed_event['description'] == "Let's Go!"
+    def _lets_go(self):
         self.expects_lets_go = False
         self.expects_play_ball = True
 
@@ -263,16 +171,12 @@ class GameState:
         self.game_update['phase'] = 1
         self.game_update['awayPitcher'] = self.away.pitcher.id
         self.game_update['awayPitcherName'] = self.away.pitcher.name
-        self.game_update['awayPitcherMod'] = show_pitcher_mod(self.away.pitcher)
         self.game_update['awayTeamBatterCount'] = -1
         self.game_update['homePitcher'] = self.home.pitcher.id
         self.game_update['homePitcherName'] = self.home.pitcher.name
-        self.game_update['homePitcherMod'] = show_pitcher_mod(self.home.pitcher)
         self.game_update['homeTeamBatterCount'] = -1
 
-    def update_play_ball(self, feed_event: dict, _: Optional[dict]):
-        assert self.expects_play_ball
-        assert feed_event['description'] == "Play ball!"
+    def _play_ball(self):
         self.expects_play_ball = False
         self.expects_half_inning_start = True
 
@@ -299,9 +203,7 @@ class GameState:
 
         return special_game_update
 
-    def update_half_inning_start(self, feed_event: dict, _: Optional[dict]):
-        assert self.expects_half_inning_start
-
+    def _half_inning_start(self):
         self.game_update['phase'] = 6  # whatever that means
         if not self.game_update['topOfInning']:
             # I am just copying observed behavior here. No idea what it means.
@@ -320,53 +222,46 @@ class GameState:
         team_name = self.game_update[self.prefix() + 'TeamName']
         description = f"{top_or_bottom} of {inning}, {team_name} batting."
 
-        assert feed_event['description'] == description
         self.game_update['lastUpdate'] = description
 
         self.expects_half_inning_start = False
         self.expects_batter_up = True
 
-    def update_batter_up(self, feed_event: dict, _: Optional[dict]):
+    def _batter_up(self):
         assert self.expects_batter_up
 
-        parsed = Parsers.batter_up.parse(feed_event['description'])
-
-        team_state = self.batting_team()
-        if not self.expects_reverberate[self.prefix()]:
-            team_state.advance_batter()
-
-        if parsed.children[0].data == 'inhabiting':
-            parsed_haunting = parsed.children.pop(0)
-            haunter_name, haunted_name = parsed_haunting.children
-            haunter = Player.load_one_at_time(feed_event['playerTags'][0],
-                                              feed_event['created'])
-            assert haunter_name == haunter.name
-            assert haunted_name == self.batter().name
-            self.haunter = PlayerState.from_player(haunter)
-
-        parsed_batter_up, *parsed_rest = parsed.children
-        parsed_batter_name, parsed_team_name = parsed_batter_up.children
         batter = self.batter()
-
-        assert team_state.nickname == parsed_team_name
-        assert batter.name == parsed_batter_name
-
-        for parsed_item in parsed_rest:
-            assert parsed_item.data == 'wielding'
-            parsed_bat, = parsed_item.children
-
-            assert parsed_bat == batter.legacy_item
-
         prefix = self.prefix()
         self.game_update[prefix + 'Batter'] = batter.id
         self.game_update[prefix + 'BatterName'] = batter.name
-        self.game_update[prefix + 'BatterMod'] = show_batter_mod(batter)
 
-        self.game_update['lastUpdate'] = feed_event['description']
+        self.game_update['lastUpdate'] = (f"{batter.name} batting for the "
+                                          f"{self.batting_team().nickname}.")
         self.game_update[prefix + 'TeamBatterCount'] += 1
 
         self.expects_batter_up = False
         self.expects_pitch = True
+
+        # Set up pitch source
+        if self.game_update['topOfInning']:
+            self.active_pitch_source = self.away_recorder.pitches_for(
+                self.batter().id, self.away.appearance_count)
+        else:
+            self.active_pitch_source = self.home_recorder.pitches_for(
+                self.batter().id, self.home.appearance_count)
+
+    def _pitch(self):
+        pitch = next(self.active_pitch_source)
+        assert pitch.batter_id == self.batter().id
+
+        if pitch.pitch_type == PitchType.BALL:
+            self._ball()
+        if pitch.pitch_type == PitchType.FOUL:
+            self._foul()
+        if pitch.pitch_type == PitchType.GROUND_OUT:
+            self._update_fielding_out("ground out")
+        else:
+            breakpoint()
 
     def update_base_steal(self, feed_event: dict, game_update: Optional[dict]):
         assert self.expects_pitch
@@ -411,23 +306,10 @@ class GameState:
         self._record_runs(runs_scored)
         self.game_update['lastUpdate'] = feed_event['description']
 
-    def update_walk(self, feed_event: dict, _: Optional[dict]):
-        assert self.expects_pitch
+    def _walk(self):
+        self.game_update['lastUpdate'] = f"{self.batter().name} draws a walk."
 
-        parsed = Parsers.walk.parse(feed_event['description'])
-        parsed_walk, *parsed_rest = parsed.children
-        parsed_walker_name, = parsed_walk.children
-
-        batter = self.batter()
-        assert parsed_walker_name == batter.name
-
-        self._update_walk_generic(batter)
-        self._update_scores(parsed_rest)
-
-        self.game_update['lastUpdate'] = feed_event['description']
-
-    def _update_walk_generic(self, batter):
-        self._player_to_base(batter, 0)  # Until the Beams get here
+        self._player_to_base(self.batter(), 0)  # no base instincts
         self._end_atbat()
 
     def update_strikeout(self, feed_event: dict, game_update: Optional[dict]):
@@ -465,8 +347,7 @@ class GameState:
     def update_ground_out(self, feed_event: dict, game_update: Optional[dict]):
         self._update_fielding_out(feed_event, game_update)
 
-    def _update_fielding_out(self, feed_event: dict,
-                             game_update: Optional[dict]):
+    def _update_fielding_out(self, out_text: str):
         assert self.expects_pitch
 
         parsed = Parsers.fielding_out.parse(feed_event['description'])
@@ -612,20 +493,19 @@ class GameState:
         else:
             self.expects_inning_end = True
 
-    def update_ball(self, feed_event: dict, _: Optional[dict]):
-        assert self.expects_pitch
-
+    def _ball(self):
         self.game_update['atBatBalls'] += 1
-        self._update_count(feed_event, ["Ball"])
 
-    def update_foul_ball(self, feed_event: dict, _: Optional[dict]):
-        assert self.expects_pitch
+        if self.game_update['atBatBalls'] >= 4:  # no walks in any parks
+            self._walk()
+        else:
+            self._output_count_description("Ball")
 
-        if (self.game_update['atBatStrikes'] + 1 <
-                self.game_update[self.prefix() + 'Strikes']):
+    def _foul(self):
+        if self.game_update['atBatStrikes'] < 2:
             self.game_update['atBatStrikes'] += 1
 
-        self._update_count(feed_event, ["Foul Ball"])
+        self._output_count_description("Foul Ball")
 
     def update_strike_zapped(self, feed_event: dict, _: Optional[dict]):
         assert self.expects_pitch
@@ -668,21 +548,15 @@ class GameState:
         assert self.expects_pitch
 
         self.game_update['atBatStrikes'] += 1
-        self._update_count(feed_event, ["Strike, swinging",
-                                        "Strike, looking",
-                                        "Strike, flinching"])
+        self._output_count_description(feed_event, ["Strike, swinging",
+                                                    "Strike, looking",
+                                                    "Strike, flinching"])
 
-    def _update_count(self, feed_event, text_options):
+    def _output_count_description(self, text):
         balls = self.game_update['atBatBalls']
         strikes = self.game_update['atBatStrikes']
-        for text in text_options:
-            description = f"{text}. {balls}-{strikes}"
-
-            if feed_event['description'] == description:
-                self.game_update['lastUpdate'] = description
-                break
-        else:
-            assert False
+        description = f"{text}. {balls}-{strikes}"
+        self.game_update['lastUpdate'] = description
 
     def update_home_run(self, feed_event: dict, _: Optional[dict]):
         assert self.expects_pitch
@@ -736,16 +610,17 @@ class GameState:
         # This must be last or it errors when this event ends the half-inning
         self._maybe_advance_baserunners(game_update)
 
-    def _update_scores(self, parsed_rest):
+    def _update_scores(self):
         runs_scored = 0
-        for parsed_item in parsed_rest:
-            assert parsed_item.data in {'score', 'sacrifice'}
+        for runner_i in reversed(range(len(self.game_update['basesOccupied']))):
+            if self.game_update['basesOccupied'][runner_i] < 3:  # no fifth base
+                continue
 
-            scoring_player_name, *parsed_extras = parsed_item.children
+            player_name = self.game_update['baserunnerNames'][runner_i]
+            self.game_update['description'] += f"\n{player_name} scores!"
 
-            # Apply extras first so the baserunners arrays are intact
-            self._apply_scoring_extras(parsed_extras)
-            runs_scored += self._score_player(scoring_player_name)
+            self._remove_baserunner_by_index(runner_i)
+            runs_scored += self._score_runs(1)
         self._record_runs(runs_scored)
 
     def _apply_scoring_extras(self, parsed_extras):
@@ -842,7 +717,6 @@ class GameState:
         # First just shove the player on the base
         self.game_update['baseRunners'].append(batter.id)
         self.game_update['baseRunnerNames'].append(batter.name)
-        self.game_update['baseRunnerMods'].append(show_runner_mod(batter))
         self.game_update['basesOccupied'].append(base_num)
         self.game_update['baserunnerCount'] += 1
 
@@ -858,8 +732,8 @@ class GameState:
                 self.game_update['basesOccupied'][runner_i] = next_base
             highest_occupied_base = self.game_update['basesOccupied'][runner_i]
 
-        # Don't do anything about scoring players -- that should be parsed
-        # separately
+        # Score anyone who's beyond 3rd base
+        self._update_scores()
 
     def update_blooddrain(self, feed_event: dict, _: Optional[dict]):
         assert self.expects_pitch  # we'll see if this holds
@@ -926,26 +800,26 @@ class GameState:
         self.game_update['lastUpdate'] = feed_event['description']
 
 
-GameState.update_type = {
-    0: GameState.update_lets_go,
-    1: GameState.update_play_ball,
-    2: GameState.update_half_inning_start,
-    4: GameState.update_base_steal,
-    5: GameState.update_walk,
-    6: GameState.update_strikeout,
-    7: GameState.update_flyout,
-    8: GameState.update_ground_out,
-    9: GameState.update_home_run,
-    10: GameState.update_hit,
-    11: GameState.update_game_score,
-    12: GameState.update_batter_up,
-    13: GameState.update_strike,
-    14: GameState.update_ball,
-    15: GameState.update_foul_ball,
-    25: GameState.update_strike_zapped,
-    27: GameState.update_mild_pitch,
-    28: GameState.update_inning_end,
-    52: GameState.update_blooddrain,
-    73: GameState.update_no_state_change_pitch,  # Peanut flavor text
-    92: GameState.update_no_state_change_batter_up,  # Superyummy
+GameProducer.update_type = {
+    0: GameProducer._lets_go,
+    1: GameProducer._play_ball,
+    2: GameProducer._half_inning_start,
+    4: GameProducer.update_base_steal,
+    5: GameProducer._walk,
+    6: GameProducer.update_strikeout,
+    7: GameProducer.update_flyout,
+    8: GameProducer.update_ground_out,
+    9: GameProducer.update_home_run,
+    10: GameProducer.update_hit,
+    11: GameProducer.update_game_score,
+    12: GameProducer._batter_up,
+    13: GameProducer.update_strike,
+    14: GameProducer._ball,
+    15: GameProducer._foul,
+    25: GameProducer.update_strike_zapped,
+    27: GameProducer.update_mild_pitch,
+    28: GameProducer.update_inning_end,
+    52: GameProducer.update_blooddrain,
+    73: GameProducer.update_no_state_change_pitch,  # Peanut flavor text
+    92: GameProducer.update_no_state_change_batter_up,  # Superyummy
 }

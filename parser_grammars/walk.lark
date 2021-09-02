@@ -1,9 +1,0 @@
-start: walk (_N score)*
-
-walk: NAME " draws a walk."
-
-%import .blaseball.NAME
-%import .blaseball._N
-%import .blaseball.score
-// Need to update things used inside score or their names get prepended
-%import .blaseball.use_free_refill

@@ -1,4 +1,4 @@
-from game_loader import get_game
+from game_transformer import generate_game
 
 
 class GameEventCache:
@@ -6,7 +6,7 @@ class GameEventCache:
 
     def __getitem__(self, game_id, play_count):
         if game_id not in self.games:
-            self.games[game_id] = get_game(game_id)
+            self.games[game_id] = generate_game(game_id)
 
         game = self.games[game_id]
         try:
