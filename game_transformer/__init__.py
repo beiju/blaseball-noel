@@ -30,6 +30,9 @@ def get_game_producer(game_id):
 
         if feed_event['type'] == 2:  # half-inning start
             this_recorder, next_recorder = next_recorder, this_recorder
+        elif feed_event['type'] == 54:  # incineration
+            this_recorder.replace_player(feed_event)
+            next_recorder.replace_player(feed_event)
         else:
             this_recorder.record_event(feed_event, game_update)
 

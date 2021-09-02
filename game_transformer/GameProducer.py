@@ -163,7 +163,10 @@ class GameProducer:
         else:
             raise RuntimeError("Unexpected state in GameProducer")
 
+        self._update_scores()
         self.game_update['playCount'] += 1
+        # one thousand plays ought to be enough for anyone
+        assert self.game_update['playCount'] < 1_000
 
         if override_return is not None:
             return override_return
@@ -237,8 +240,17 @@ class GameProducer:
 
     def _batter_up(self):
         assert self.expects_batter_up
+        if self.game_update['topOfInning']:
+            recorder = self.away_recorder
+        else:
+            recorder = self.home_recorder
 
+        first_batter = self.batter().id
         self.batting_team().advance_batter()
+        while not recorder.has_pitches_for(self.batter().id):
+            self.batting_team().advance_batter()
+            # Prevent infinite loop
+            assert self.batter() != first_batter
 
         batter = self.batter()
         prefix = self.prefix()
@@ -253,12 +265,8 @@ class GameProducer:
         self.expects_pitch = True
 
         # Set up pitch source
-        if self.game_update['topOfInning']:
-            self.active_pitch_source = self.away_recorder.pitches_for(
-                self.batter().id, self.away.appearance_count)
-        else:
-            self.active_pitch_source = self.home_recorder.pitches_for(
-                self.batter().id, self.home.appearance_count)
+        self.active_pitch_source = recorder.pitches_for(
+            self.batter().id, self.batting_team().appearance_count)
 
     def _pitch(self):
         pitch: Pitch = next(self.active_pitch_source)

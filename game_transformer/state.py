@@ -16,6 +16,7 @@ class PlayerState:
 
 @dataclass
 class TeamState:
+    id: str
     nickname: str
     pitcher: PlayerState
     lineup: List[PlayerState]
@@ -25,6 +26,7 @@ class TeamState:
     def __init__(self, updates: List[dict], timestamp: str, prefix: str):
         team = Team.load_at_time(first_truthy(updates, prefix + 'Team'),
                                  timestamp)
+        self.id = team.id
         self.nickname = team.get_nickname()
 
         self.pitcher = PlayerState(

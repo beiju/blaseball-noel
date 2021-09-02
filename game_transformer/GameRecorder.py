@@ -1,10 +1,14 @@
 import random
 from dataclasses import dataclass
+from datetime import timedelta
 from enum import Enum, auto
 from itertools import chain
 from typing import Optional, Any, Dict, Tuple, List
 
-from game_transformer.state import TeamState
+from blaseball_mike.models import Player
+from dateutil.parser import isoparse
+
+from game_transformer.state import TeamState, PlayerState
 
 random.seed(0)  # For stability while testing
 
@@ -63,15 +67,15 @@ NON_PITCH_TYPES = {
     37,  # free refill
     39,  # coffee bean
     40,  # feedback swap blocked
-    41,  # feedback swap
+    # 41,  # feedback swap (i need to swap the players in my data)
     45,  # superallergic reaction
     47,  # allergic reaction
     48,  # player gained Reverberating
-    49,  # reverb wiggle
+    # 49,  # reverb wiggle (i need to swap the players in my data)
     51,  # blooddrain, normal
     52,  # blooddrain, siphon
     53,  # blooddrain, sealant
-    54,  # incineration
+    # 54,  # incineration (i need to swap the players in my data)
     55,  # blocked incineration (fireproof/fire eater)
     62,  # baserunners swept in Flooding
     63,  # salmon
@@ -163,6 +167,8 @@ class GameRecorder:
 
         if update_type == 12:  # Batter up
             self._batter_up(feed_event)
+        elif update_type == 23:  # shellsewhere
+            self.team.advance_batter()
         else:
             pitch_type = get_pitch_type(feed_event)
             if pitch_type is not None:
@@ -203,9 +209,12 @@ class GameRecorder:
 
         raise RuntimeError("Who is batting?")
 
+    def has_pitches_for(self, player_id):
+        return any(pitch.batter_id == player_id for pitch in self.pitches)
+
     def pitches_for(self, player_id, appearance_count):
         # Make reasonable effort to avoid an infinite loop
-        if not any(pitch.batter_id == player_id for pitch in self.pitches):
+        if not self.has_pitches_for(player_id):
             raise RuntimeError("No pitches for player")
 
         def pitch_filter(pitch: Pitch):
@@ -215,11 +224,29 @@ class GameRecorder:
         appearance_pitches = filter(pitch_filter, self.pitches)
 
         def random_pitches():
+            player_pitches = [pitch for pitch in self.pitches
+                              if pitch.batter_id == player_id]
             while True:
-                pitch = random.choice(self.pitches)
-                if pitch.batter_id == player_id:
-                    yield pitch
+                yield random.choice(player_pitches)
 
         # Return pitches from this appearance until they are exhausted, then
         # return random pitches from this batter during this game
         return chain(appearance_pitches, random_pitches())
+
+    def replace_player(self, feed_event: dict):
+        victim_id, replacement_id = feed_event['playerTags']
+
+        def get_replacement():
+            timestamp = isoparse(feed_event['created']) + timedelta(seconds=180)
+            replacement = Player.load_one_at_time(replacement_id, timestamp)
+            return PlayerState.from_player(replacement)
+
+        if self.team.pitcher.id == victim_id:
+            self.team.pitcher = get_replacement()
+        else:
+            try:
+                idx = [p.id for p in self.team.lineup].index(victim_id)
+            except ValueError:
+                pass  # must have been the other team
+            else:
+                self.team.lineup[idx] = get_replacement()
