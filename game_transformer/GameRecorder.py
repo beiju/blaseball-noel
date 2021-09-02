@@ -5,7 +5,7 @@ from enum import Enum, auto
 from itertools import chain
 from typing import Optional, Any, Dict, Tuple, List
 
-from blaseball_mike.models import Player
+from blaseball_mike.models import Player, Team
 from dateutil.parser import isoparse
 
 from game_transformer.state import TeamState, PlayerState
@@ -105,9 +105,6 @@ NON_PITCH_TYPES = {
     99,  # shame donor
 }
 
-JsonDict = Dict[str, Any]
-EventData = Tuple[JsonDict, Optional[JsonDict]]
-
 
 def get_pitch_type(feed_event: Dict[str, Any]):
     event_type: int = feed_event['type']
@@ -152,13 +149,13 @@ def get_pitch_type(feed_event: Dict[str, Any]):
 
 class GameRecorder:
     def __init__(self, updates, prefix):
+        self.prefix = prefix
+
         # Updates with play count 0 have the wrong timestamp
         time_update = next(u for u in updates if u['data']['playCount'] > 0)
 
         # Chronicler adds timestamp so I can depend on it existing
         self.team = TeamState(updates, time_update['timestamp'], prefix)
-
-        self.current_atbat: List[EventData] = []
 
         self.pitches: List[Pitch] = []
 
@@ -233,20 +230,29 @@ class GameRecorder:
         # return random pitches from this batter during this game
         return chain(appearance_pitches, random_pitches())
 
+    def reload_lineup(self, feed_event: dict):
+        timestamp = isoparse(feed_event['created']) + timedelta(seconds=180)
+        team = Team.load_at_time(self.team.id, timestamp)
+
+        self.team.lineup = [PlayerState.from_player(p) for p in team.lineup]
+
     def replace_player(self, feed_event: dict):
-        victim_id, replacement_id = feed_event['playerTags']
+        a_id, b_id = feed_event['playerTags']
 
-        def get_replacement():
+        def get_replacement(player_id):
             timestamp = isoparse(feed_event['created']) + timedelta(seconds=180)
-            replacement = Player.load_one_at_time(replacement_id, timestamp)
-            return PlayerState.from_player(replacement)
+            player = Player.load_one_at_time(player_id, timestamp)
+            return PlayerState.from_player(player)
 
-        if self.team.pitcher.id == victim_id:
-            self.team.pitcher = get_replacement()
-        else:
+        # Try both orders. This matters for feedback.
+        for victim_id, replacement_id in [(a_id, b_id), (b_id, a_id)]:
+            if self.team.pitcher.id == victim_id:
+                self.team.pitcher = get_replacement(replacement_id)
+                return  # gotta early return or it might un-swap
             try:
                 idx = [p.id for p in self.team.lineup].index(victim_id)
             except ValueError:
                 pass  # must have been the other team
             else:
-                self.team.lineup[idx] = get_replacement()
+                self.team.lineup[idx] = get_replacement(replacement_id)
+                return  # gotta early return or it might un-swap

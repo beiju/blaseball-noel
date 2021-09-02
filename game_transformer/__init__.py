@@ -33,6 +33,12 @@ def get_game_producer(game_id):
         elif feed_event['type'] == 54:  # incineration
             this_recorder.replace_player(feed_event)
             next_recorder.replace_player(feed_event)
+        elif feed_event['type'] == 41:  # feedback
+            this_recorder.replace_player(feed_event)
+            next_recorder.replace_player(feed_event)
+        elif feed_event['type'] == 49:  # reverb
+            this_recorder.reload_lineup(feed_event)
+            next_recorder.reload_lineup(feed_event)
         else:
             this_recorder.record_event(feed_event, game_update)
 
