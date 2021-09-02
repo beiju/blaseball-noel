@@ -14,7 +14,6 @@ def generate_game(game_id):
 
 
 def get_game_producer(game_id):
-    print("Fetching game updates...")
     game_updates_by_play = fetch_game_updates(game_id)
     game_updates_flat = (flatten(game_updates_by_play[k]
                                  for k in sorted(game_updates_by_play.keys())))
@@ -25,7 +24,6 @@ def get_game_producer(game_id):
     # (non-ignored) event.
     this_recorder, next_recorder = home_recorder, away_recorder
 
-    print("Processing feed events...")
     for i, feed_event in enumerate(fetch_feed_events(game_id)):
         game_update = game_update_for_event(game_updates_by_play,
                                             feed_event['metadata']['play'])

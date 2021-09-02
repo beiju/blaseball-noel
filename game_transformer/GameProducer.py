@@ -155,7 +155,11 @@ class GameProducer:
         elif self.expects_pitch:
             self._pitch()
         elif self.expects_inning_end:
-            self._end_inning()
+            self._inning_end()
+        elif self.expects_game_end:
+            self._game_end()
+        elif self.game_update['finalized']:
+            raise StopIteration()
         else:
             raise RuntimeError("Unexpected state in GameProducer")
 
@@ -278,10 +282,11 @@ class GameProducer:
             self._strike("swinging")
         elif pitch.pitch_type == PitchType.STRIKE_LOOKING:
             self._strike("looking")
+        elif pitch.pitch_type == PitchType.HOME_RUN:
+            self._home_run()
         else:
             breakpoint()
 
-        self._update_scores()
 
     def update_base_steal(self, feed_event: dict, game_update: Optional[dict]):
         assert self.expects_pitch
@@ -449,34 +454,26 @@ class GameProducer:
         description = f"{text}. {balls}-{strikes}"
         self.game_update['lastUpdate'] = description
 
-    def update_home_run(self, feed_event: dict, _: Optional[dict]):
-        assert self.expects_pitch
+    def _home_run(self):
+        batter = self.batter()
+        num_runners = len(self.game_update['baseRunners'])
 
-        parsed = Parsers.home_run.parse(feed_event['description'])
-        (parsed_hr, *parsed_rest) = parsed.children
-        batter_name, parsed_hr_type = parsed_hr.children
-
-        if parsed_hr_type.data == 'solo_hr':
-            num_scores = 1
+        if num_runners == 0:
+            desc = f"{batter.name} hit a solo home run!"
+        elif num_runners == 3:
+            desc = f"{batter.name} hit a grand slam!"
         else:
-            assert parsed_hr_type.data == 'multi_hr'
-            num_scores_str, = parsed_hr_type.children
-            num_scores = int(num_scores_str)
+            desc = f"{batter.name} hit a {num_runners}-run home run!"
 
-        self._apply_scoring_extras(parsed_rest)
+        # Yeet the batter straight to 4th. This pushes everyone else into
+        # scoring range
+        self._player_to_base(batter, 3)
+        # Score runners now so I can override the description
+        self._update_scores()
 
-        # Remove baserunners after applying scoring extras so it knows who the
-        # baserunners were
-        for _ in range(num_scores - 1):
-            self._remove_baserunner_by_index(0)
+        # Set description after updating scores to override scorer names
+        self.game_update['lastUpdate'] = desc
 
-        # Home runs should clear the bases
-        assert len(self.game_update['baseRunners']) == 0
-
-        self.game_update['lastUpdate'] = feed_event['description']
-
-        self._score_runs(num_scores)
-        self._record_runs(num_scores)
         self._end_atbat()
 
     def _hit(self, to_base: int):
@@ -504,21 +501,20 @@ class GameProducer:
             runs_scored += self._score_runs(1)
         self._record_runs(runs_scored)
 
-    def update_game_score(self, feed_event: dict, _: Optional[dict]):
+    def _game_end(self):
         assert self.expects_game_end
 
         away_text = f"{self.away.nickname} {self.game_update['awayScore']}"
         home_text = f"{self.home.nickname} {self.game_update['homeScore']}"
         if self.game_update['homeScore'] > self.game_update['awayScore']:
-            description = f"{home_text}, {away_text}"
+            self.game_update['lastUpdate'] = f"{home_text}, {away_text}"
         else:
-            description = f"{away_text}, {home_text}"
-
-        assert description == feed_event['description']
-        self.game_update['lastUpdate'] = description
+            self.game_update['lastUpdate'] = f"{away_text}, {home_text}"
 
         self.game_update['finalized'] = True
         self.game_update['gameComplete'] = True
+
+        self.expects_game_end = False
 
     def _record_runs(self, runs_scored):
         if runs_scored == 1:
@@ -562,7 +558,7 @@ class GameProducer:
 
         # Scoring players is handled centrally as the last step of a pitch
 
-    def _end_inning(self):
+    def _inning_end(self):
         assert self.expects_inning_end
 
         inning = self.game_update['inning'] + 1

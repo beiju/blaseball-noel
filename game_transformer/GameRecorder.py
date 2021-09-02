@@ -128,14 +128,14 @@ class GameRecorder:
         assert self.team.batter().name != self.team.next_batter().name
 
         expected_desc = (f"{self.team.batter().name} batting for the "
-                         f"{self.team.nickname}.")
-        if feed_event['description'] == expected_desc:
+                         f"{self.team.nickname}")
+        if feed_event['description'].startswith(expected_desc):
             # No advancement
             return
 
         expected_desc = (f"{self.team.next_batter().name} batting for the "
-                         f"{self.team.nickname}.")
-        if feed_event['description'] == expected_desc:
+                         f"{self.team.nickname}")
+        if feed_event['description'].startswith(expected_desc):
             # Regular advancement
             self.team.advance_batter()
             return
