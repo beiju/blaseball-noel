@@ -48,11 +48,57 @@ NON_PITCH_TYPES = {
     4,  # base steal
     11,  # end of game
     12,  # batter up
+    20,  # solar panels runs overflow
+    21,  # home field advantage
+    24,  # party
     25,  # strike zapped
+    26,  # weather changes
     28,  # inning becomes outing
-    52,  # blooddrain
+    30,  # black hole activation
+    31,  # sun2 activation
+    33,  # birds circle, no unshelling
+    34,  # friend of crows
+    35,  # unshelling
+    36,  # triple threat
+    37,  # free refill
+    39,  # coffee bean
+    40,  # feedback swap blocked
+    41,  # feedback swap
+    45,  # superallergic reaction
+    47,  # allergic reaction
+    48,  # player gained Reverberating
+    49,  # reverb wiggle
+    51,  # blooddrain, normal
+    52,  # blooddrain, siphon
+    53,  # blooddrain, sealant
+    54,  # incineration
+    55,  # blocked incineration (fireproof/fire eater)
+    62,  # baserunners swept in Flooding
+    63,  # salmon
+    64,  # polarity shift
+    65,  # enter secret base
+    66,  # exit secret base
+    67,  # consumer attack
+    69,  # echo chamber
+    70,  # grind rail
+    71,  # tunnels
+    72,  # peanut mister
     73,  # peanut flavor
+    74,  # taste the infinite
+    76,  # event horizon activates
+    77,  # event horizon awaits
+    78,  # solar panels await
+    79,  # solar panels activate
+    84,  # return from elsewhere
+    85,  # over under
+    86,  # under over
+    88,  # undersea
+    91,  # homebody
     92,  # superyummy
+    93,  # perk
+    96,  # earlbird
+    97,  # late to the party
+    99,  # shame donor
 }
 
 JsonDict = Dict[str, Any]
@@ -97,7 +143,7 @@ def get_pitch_type(feed_event: Dict[str, Any]):
     elif event_type in NON_PITCH_TYPES:
         return None
 
-    raise RuntimeError("Unknown pitch type")
+    raise RuntimeError("Unknown event type")
 
 
 class GameRecorder:
@@ -133,14 +179,14 @@ class GameRecorder:
 
         expected_desc = (f"{self.team.next_batter().name} batting for the "
                          f"{self.team.nickname}")
-        if feed_event['description'].startswith(expected_desc):
+        if expected_desc in feed_event['description']:
             # Regular advancement
             self.team.advance_batter()
             return
 
         expected_desc = (f"{self.team.batter().name} batting for the "
                          f"{self.team.nickname}")
-        if feed_event['description'].startswith(expected_desc):
+        if expected_desc in feed_event['description']:
             # No advancement
             return
 
