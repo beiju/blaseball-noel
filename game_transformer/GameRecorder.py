@@ -6,6 +6,8 @@ from typing import Optional, Any, Dict, Tuple, List
 
 from game_transformer.state import TeamState
 
+random.seed(0)  # For stability while testing
+
 
 class PitchType(Enum):
     BALL = auto()
@@ -27,6 +29,7 @@ class Pitch:
     batter_id: str
     appearance_count: int
     pitch_type: PitchType
+    original_text: str
 
 
 SIMPLE_PITCH_TYPES = {
@@ -116,7 +119,8 @@ class GameRecorder:
                 self.pitches.append(Pitch(
                     batter_id=self.team.batter().id,
                     appearance_count=self.team.appearance_count,
-                    pitch_type=pitch_type
+                    pitch_type=pitch_type,
+                    original_text=feed_event['description']
                 ))
 
     def _batter_up(self, feed_event: dict):
