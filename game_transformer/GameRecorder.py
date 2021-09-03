@@ -49,6 +49,8 @@ NON_PITCH_TYPES = {
     0,  # let's go
     1,  # play ball
     2,  # half inning start
+    3,  # pitcher switch (see https://reblase.sibr.dev/game/
+    # 2c54bafe-c63b-4ec6-8c66-3cdefebfa952#be727d66-0d1a-ba38-24f4-83ffc4a9710f)
     4,  # base steal
     11,  # end of game
     12,  # batter up
