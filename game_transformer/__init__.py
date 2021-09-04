@@ -1,16 +1,32 @@
 from collections import defaultdict
+from dataclasses import dataclass
+from datetime import timedelta, datetime
 from itertools import groupby
 
 from blaseball_mike import chronicler, eventually
+from dateutil.parser import isoparse
 
 from game_transformer.GameRecorder import GameRecorder
 from game_transformer.GameProducer import GameProducer
 
 
+@dataclass
+class StampedUpdate:
+    timestamp: datetime
+    data: dict
+
+
 def generate_game(game_id):
     producer: GameProducer = get_game_producer(game_id)
+    timestamp = isoparse(producer.game_start)
 
-    return [update for update in producer]
+    # Dict of play count -> update data
+    new_updates = []
+    for update in producer:
+        new_updates.append(StampedUpdate(timestamp, update))
+        timestamp += timedelta(seconds=5)
+
+    return new_updates
 
 
 def get_game_producer(game_id):

@@ -14,6 +14,10 @@ HIT_NAME = {
 class GameProducer:
     def __init__(self, updates: List[dict], home_recorder: GameRecorder,
                  away_recorder: GameRecorder):
+        self.updates = updates
+        self.home_recorder = home_recorder
+        self.away_recorder = away_recorder
+
         self.expects_lets_go = True
         self.expects_play_ball = False
         self.expects_half_inning_start = False
@@ -22,15 +26,13 @@ class GameProducer:
         self.expects_inning_end = False
         self.expects_game_end = False
 
-        self.home_recorder = home_recorder
-        self.away_recorder = away_recorder
-
         # Updates with play count 0 have the wrong timestamp
         time_update = next(u for u in updates if u['data']['playCount'] > 0)
+        self.game_start = time_update['timestamp']
 
         # Chronicler adds timestamp so I can depend on it existing
-        self.home = TeamState(updates, time_update['timestamp'], 'home')
-        self.away = TeamState(updates, time_update['timestamp'], 'away')
+        self.home = TeamState(updates, self.game_start, 'home')
+        self.away = TeamState(updates, self.game_start, 'away')
 
         self.active_pitch_source = None
 
@@ -294,7 +296,6 @@ class GameProducer:
             self._home_run()
         else:
             breakpoint()
-
 
     def update_base_steal(self, feed_event: dict, game_update: Optional[dict]):
         assert self.expects_pitch
@@ -584,5 +585,3 @@ class GameProducer:
 
         self.expects_pitch = False
         self.expects_game_end = True
-
-

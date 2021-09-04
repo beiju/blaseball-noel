@@ -1,10 +1,13 @@
 import requests as requests
 from flask import Flask, request, Response, jsonify
 
+from game_transformer import generate_game
+
 app = Flask(__name__)
 
 
-def transform_game(game):
+def transform_game(game, valid_from):
+    game_updates = generate_game(game['id'])
     return {
         **game,
         'lastUpdate': "[modified] " + game['lastUpdate']
@@ -20,7 +23,8 @@ def transform_item(item):
                 **item['data']['value'],
                 'games': {
                     **item['data']['value']['games'],
-                    'schedule': [transform_game(game) for game in
+                    'schedule': [transform_game(game, item['validFrom'])
+                                 for game in
                                  item['data']['value']['games']['schedule']]
                 }
             }
@@ -28,7 +32,7 @@ def transform_item(item):
     }
 
 
-def transform_response(resp):
+def get_stream(resp):
     stream_records = resp.json()
     return jsonify({
         **stream_records,
@@ -39,6 +43,9 @@ def transform_response(resp):
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def catch_all(path):
+    if 'type' in request.values and request.values['type'] == 'Stream':
+        return get_stream(request.values)
+
     resp = requests.request(
         method=request.method,
         url=request.url.replace(request.host_url, 'https://api.sibr.dev/'),
@@ -52,9 +59,6 @@ def catch_all(path):
                         'transfer-encoding', 'connection']
     headers = [(name, value) for (name, value) in resp.raw.headers.items()
                if name.lower() not in excluded_headers]
-
-    if resp.status_code == 200 and request.values['type'] == 'Stream':
-        return transform_response(resp)
 
     return Response(resp.content, resp.status_code, headers)
 
