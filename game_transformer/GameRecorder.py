@@ -1,9 +1,10 @@
 import random
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum, auto
 from itertools import chain
-from typing import Optional, Any, Dict, Tuple, List
+from typing import Optional, Any, Dict, List
 
 from blaseball_mike.models import Player, Team
 from dateutil.parser import isoparse
@@ -34,6 +35,7 @@ class Pitch:
     appearance_count: int
     pitch_type: PitchType
     original_text: str
+    advancements: Dict[str, int]
 
 
 SIMPLE_PITCH_TYPES = {
@@ -149,6 +151,22 @@ def get_pitch_type(feed_event: Dict[str, Any]):
     raise RuntimeError("Unknown event type")
 
 
+def player_bases(game_event):
+    return {runner: base for runner, base in zip(game_event['baseRunners'],
+                                                 game_event['basesOccupied'])}
+
+
+def bases_from_pitch(pitch_type: PitchType):
+    if pitch_type == PitchType.SINGLE:
+        return 1
+    elif pitch_type == PitchType.DOUBLE:
+        return 2
+    elif pitch_type == PitchType.TRIPLE:
+        return 3
+
+    return 0
+
+
 class GameRecorder:
     def __init__(self, updates, prefix):
         self.prefix = prefix
@@ -160,6 +178,8 @@ class GameRecorder:
         self.team = TeamState(updates, time_update['timestamp'], prefix)
 
         self.pitches: List[Pitch] = []
+        self.prev_known_game_event: Optional[dict] = None
+        self.advancements: Dict[str, List[int]] = defaultdict(lambda: [])
 
     def record_event(self, feed_event: dict, game_event: Optional[dict]):
         update_type = feed_event['type']
@@ -171,12 +191,18 @@ class GameRecorder:
         else:
             pitch_type = get_pitch_type(feed_event)
             if pitch_type is not None:
+                advancements = self.get_advancements(
+                    game_event, bases_from_pitch(pitch_type))
                 self.pitches.append(Pitch(
                     batter_id=self.team.batter().id,
                     appearance_count=self.team.appearance_count,
                     pitch_type=pitch_type,
-                    original_text=feed_event['description']
+                    original_text=feed_event['description'],
+                    advancements=advancements
                 ))
+
+        if game_event is not None:
+            self.prev_known_game_event = game_event
 
     def _batter_up(self, feed_event: dict):
         # Figure out whether the batter actually advanced
@@ -258,3 +284,45 @@ class GameRecorder:
             else:
                 self.team.lineup[idx] = get_replacement(replacement_id)
                 return  # gotta early return or it might un-swap
+
+    def get_advancements(self, game_event: Optional[dict], bases_from_hit: int):
+        if game_event is None or self.prev_known_game_event is None:
+            return {}
+
+        advancements = {}
+        bases_before = player_bases(self.prev_known_game_event)
+        bases_after = player_bases(game_event)
+        for runner, base_after in bases_after.items():
+            try:
+                base_before = bases_before[runner]
+            except KeyError:
+                # Runner got on base during this event. They aren't allowed to
+                # advance again.
+                advancements[runner] = 0
+            else:
+                # Runners shouldn't be credited for the bases they advance as
+                # a result of the hit. Not sure that applies to baseball but it
+                # does apply to blaseball.
+                base_before += bases_from_hit
+                assert base_before <= base_after
+
+                # If the base in front of them was occupied, their "decision"
+                # not to advance wasn't really a decision. Don't record it. If
+                # a player that was 2 bases ahead of them stopped them from
+                # advancing by 2, then tough. It'll be recorded as them deciding
+                # to "only" advance by 1.
+                if base_before + 1 not in bases_before.values():
+                    advancements[runner] = base_after - base_before
+
+        for runner_id, advancement in advancements.items():
+            self.advancements[runner_id].append(advancement)
+
+        return advancements
+
+    def random_advancement(self, runner_id):
+        try:
+            return random.choice(self.advancements[runner_id])
+        except IndexError:
+            # This means there were no advancement opportunities recorded.
+            # Sucks to be you. You don't get to advance.
+            return 0

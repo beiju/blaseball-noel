@@ -248,13 +248,13 @@ class GameProducer:
     def _batter_up(self):
         assert self.expects_batter_up
         if self.game_update['topOfInning']:
-            recorder = self.away_recorder
+            self.active_recorder = self.away_recorder
         else:
-            recorder = self.home_recorder
+            self.active_recorder = self.home_recorder
 
         first_batter = self.batter().id
         self.batting_team().advance_batter()
-        while not recorder.has_pitches_for(self.batter().id):
+        while not self.active_recorder.has_pitches_for(self.batter().id):
             self.batting_team().advance_batter()
             # Prevent infinite loop
             assert self.batter() != first_batter
@@ -272,7 +272,7 @@ class GameProducer:
         self.expects_pitch = True
 
         # Set up pitch source
-        self.active_pitch_source = recorder.pitches_for(
+        self.active_pitch_source = self.active_recorder.pitches_for(
             self.batter().id, self.batting_team().appearance_count)
 
     def _pitch(self):
@@ -284,15 +284,15 @@ class GameProducer:
         elif pitch.pitch_type == PitchType.FOUL:
             self._foul()
         elif pitch.pitch_type == PitchType.GROUND_OUT:
-            self._fielding_out("ground out", pitch.original_text)
+            self._fielding_out("ground out", pitch)
         elif pitch.pitch_type == PitchType.FLYOUT:
-            self._fielding_out("flyout", pitch.original_text)
+            self._fielding_out("flyout", pitch)
         elif pitch.pitch_type == PitchType.SINGLE:
-            self._hit(0)
+            self._hit(0, pitch)
         elif pitch.pitch_type == PitchType.DOUBLE:
-            self._hit(1)
+            self._hit(1, pitch)
         elif pitch.pitch_type == PitchType.TRIPLE:
-            self._hit(2)
+            self._hit(2, pitch)
         elif pitch.pitch_type == PitchType.STRIKE_SWINGING:
             self._strike("swinging")
         elif pitch.pitch_type == PitchType.STRIKE_LOOKING:
@@ -351,7 +351,7 @@ class GameProducer:
         self._player_to_base(self.batter(), 0)  # no base instincts
         self._end_atbat()
 
-    def _fielding_out(self, out_text: str, original_description: str):
+    def _fielding_out(self, out_text: str, pitch: Pitch):
         assert self.expects_pitch
 
         def description(fielder: PlayerState):
@@ -360,22 +360,33 @@ class GameProducer:
         batter = self.batter()
         # Find the fielder
         fielder = next(fielder for fielder in self.fielding_team().lineup
-                       if description(fielder) in original_description)
+                       if description(fielder) in pitch.original_text)
 
         self.game_update['lastUpdate'] = description(fielder)
 
-        self._maybe_advance_baserunners()
+        self._maybe_advance_baserunners(pitch)
         self._out()
 
-    def _maybe_advance_baserunners(self):
+    def _maybe_advance_baserunners(self, pitch: Pitch):
         next_occupied_base = None
-        for runner_i in range(len(self.game_update['baseRunners'])):
+        # Iterating the list in order gets the closest-to-home runner first
+        for runner_i, runner_id in enumerate(self.game_update['baseRunners']):
             base = self.game_update['basesOccupied'][runner_i]
             assert next_occupied_base is None or next_occupied_base > base
-            if next_occupied_base is None or base + 1 < next_occupied_base:
-                # TODO: Hook up a decision source
-                if random.random() > 0.5:
-                    self.game_update['basesOccupied'][runner_i] += 1
+
+            # Figure out how much this runner wanted to advance
+            try:
+                advance_by = pitch.advancements[runner_id]
+            except KeyError:
+                advance_by = self.active_recorder.random_advancement(runner_id)
+
+            # Prevent them from advancing to a base someone else is on
+            if next_occupied_base is not None:
+                advance_by = min(advance_by, next_occupied_base - 1 - base)
+
+            # Record advancement
+            self.game_update['basesOccupied'][runner_i] += advance_by
+            next_occupied_base = self.game_update['basesOccupied'][runner_i]
 
     def _out(self, for_batter=True):
         self.game_update['halfInningOuts'] += 1
@@ -490,7 +501,7 @@ class GameProducer:
 
         self._end_atbat()
 
-    def _hit(self, to_base: int):
+    def _hit(self, to_base: int, pitch: Pitch):
         assert self.expects_pitch
 
         batter = self.batter()
@@ -498,7 +509,7 @@ class GameProducer:
                                           f"{HIT_NAME[to_base]}!")
 
         self._player_to_base(batter, to_base)
-        self._maybe_advance_baserunners()
+        self._maybe_advance_baserunners(pitch)
 
         self._end_atbat()
 
