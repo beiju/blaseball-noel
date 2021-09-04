@@ -15,20 +15,24 @@ app = Flask(__name__)
 app.config.from_mapping(config)
 cache = Cache(app)
 
-generate_game_memo = cache.memoize(timeout=0)(generate_game)
+
+@cache.memoize(timeout=0)
+def generate_game_memo(game_id):
+    return generate_game(game_id)
 
 
 def transform_game(game):
     game_updates = generate_game_memo(game['id'])
+
+    if game['finalized']:
+        return game_updates[-1].data
+
     try:
         update = next(u for u in game_updates
                       if u.data['playCount'] == game['playCount'])
         return update.data
     except StopIteration:
-        return {
-            **game,
-            'lastUpdate': "[unmodified] " + game['lastUpdate']
-        }
+        return game_updates[-1].data
 
 
 def transform_item(item):
