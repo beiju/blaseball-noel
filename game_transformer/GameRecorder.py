@@ -193,7 +193,7 @@ class GameRecorder:
         self.team = TeamState(updates, time_update['timestamp'], prefix)
 
         self.pitches: List[Pitch] = []
-        self.prev_known_game_event: Optional[dict] = None
+        self.prev_known_game_update: Optional[dict] = None
         self.advancements: Dict[str, List[int]] = defaultdict(lambda: [])
 
         # Dict of replacement player names to replaced player indices
@@ -210,7 +210,8 @@ class GameRecorder:
             pitch_info = get_pitch_type(feed_event, game_update)
             if pitch_info is not None:
                 pitch_type, base_reached = pitch_info
-                advancements = self.get_advancements(game_update, base_reached)
+                advancements = self.get_advancements(
+                    feed_event, game_update, base_reached)
                 self.pitches.append(Pitch(
                     batter_id=self.team.batter().id,
                     appearance_count=self.team.appearance_count,
@@ -221,7 +222,7 @@ class GameRecorder:
                 ))
 
         if game_update is not None:
-            self.prev_known_game_event = game_update
+            self.prev_known_game_update = game_update
 
     def _batter_up(self, feed_event: dict):
         # Figure out whether the batter actually advanced
@@ -305,13 +306,18 @@ class GameRecorder:
                 self.replacement_map[self.team.lineup[idx].name] = idx
                 return  # gotta early return or it might un-swap
 
-    def get_advancements(self, game_event: Optional[dict], bases_from_hit: int):
-        if game_event is None or self.prev_known_game_event is None:
+    def get_advancements(self, feed_event: dict,
+                         game_update: Optional[dict],
+                         bases_from_hit: int):
+        # just because the variable name is too long
+        prev_update = self.prev_known_game_update
+
+        if game_update is None or prev_update is None:
             return {}
 
         advancements = {}
-        bases_before = player_bases(self.prev_known_game_event)
-        bases_after = player_bases(game_event)
+        bases_before = player_bases(prev_update)
+        bases_after = player_bases(game_update)
         for runner, base_after in bases_after.items():
             try:
                 base_before = bases_before[runner]
@@ -334,6 +340,15 @@ class GameRecorder:
                 # to "only" advance by 1.
                 if base_before + 1 not in bases_before.values():
                     advancements[runner] = base_after - base_before
+
+        # Find players who advanced all the way to home
+        for runner_i, runner_name in enumerate(prev_update['baseRunnerNames']):
+            if f"{runner_name} scores" in feed_event['description']:
+                runner_id = prev_update['baseRunners'][runner_i]
+                base_before = prev_update['basesOccupied'][runner_i]
+                if bases_from_hit is not None:
+                    base_before += bases_from_hit
+                advancements[runner_id] = 3 - base_before
 
         for runner_id, advancement in advancements.items():
             self.advancements[runner_id].append(advancement)

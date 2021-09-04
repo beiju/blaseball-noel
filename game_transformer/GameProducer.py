@@ -608,6 +608,11 @@ class GameProducer:
         self.game_update['lastUpdate'] = (f"{batter.name} hit a "
                                           f"{HIT_NAME[pitch.base_reached]}!")
 
+        # Everyone always advances at least the number of bases corresponding to
+        # the hit
+        for i, prev_base in enumerate(self.game_update['basesOccupied']):
+            self.game_update['basesOccupied'][i] += pitch.base_reached + 1
+
         self._player_to_base(batter, pitch.base_reached)
         self._maybe_advance_baserunners(pitch)
 
