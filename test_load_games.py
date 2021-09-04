@@ -12,7 +12,7 @@ class TestAllGames(unittest.TestCase):
         self.maxDiff = None
 
     @parameterized.expand([(g['gameId'],)
-                           for g in chronicler.get_games(season=12)])
+                           for g in chronicler.get_games(season=12, count=10)])
     def test_s12_game(self, game_id):
         game = generate_game(game_id)
         self.assertIsInstance(game, list)

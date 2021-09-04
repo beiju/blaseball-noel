@@ -3,11 +3,12 @@ from dataclasses import dataclass
 from datetime import timedelta, datetime
 from itertools import groupby
 
-from blaseball_mike import chronicler, eventually
+from blaseball_mike import eventually
 from dateutil.parser import isoparse
 
-from game_transformer.GameRecorder import GameRecorder
+from blaseball_mike.chronicler import get_game_updates
 from game_transformer.GameProducer import GameProducer
+from game_transformer.GameRecorder import GameRecorder
 
 
 @dataclass
@@ -17,6 +18,7 @@ class StampedUpdate:
 
 
 def generate_game(game_id):
+    print("Generating game", game_id)
     producer: GameProducer = get_game_producer(game_id)
     timestamp = isoparse(producer.game_start)
 
@@ -63,8 +65,7 @@ def get_game_producer(game_id):
 
 def fetch_game_updates(game_id):
     game_updates_by_play = defaultdict(lambda: [])
-    for game_update in chronicler.get_game_updates(game_ids=game_id,
-                                                   cache_time=None):
+    for game_update in get_game_updates(game_ids=game_id, cache_time=None):
         play_count = game_update['data']['playCount']
         game_updates_by_play[play_count].append(game_update)
 

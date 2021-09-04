@@ -1,4 +1,5 @@
 import random
+from copy import deepcopy
 from typing import Optional, List
 
 from game_transformer.GameRecorder import GameRecorder, PitchType, Pitch
@@ -145,11 +146,11 @@ class GameProducer:
         return self
 
     def __next__(self):
-        override_return = None
+        return_val = None
         if self.expects_lets_go:
             self._lets_go()
         elif self.expects_play_ball:
-            override_return = self._play_ball()
+            return_val = deepcopy(self._play_ball())
         elif self.expects_half_inning_start:
             self._half_inning_start()
         elif self.expects_batter_up:
@@ -170,10 +171,14 @@ class GameProducer:
         # one thousand plays ought to be enough for anyone
         assert self.game_update['playCount'] < 1_000
 
-        if override_return is not None:
-            return override_return
+        if return_val is None:
+            return_val = deepcopy(self.game_update)
 
-        return self.game_update
+        # Reset stuff that should be reset every game update
+        self.game_update['scoreUpdate'] = ""
+        self.game_update['scoreLedger'] = ""
+
+        return return_val
 
     def _lets_go(self):
         self.expects_lets_go = False
