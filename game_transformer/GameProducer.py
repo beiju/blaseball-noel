@@ -268,8 +268,10 @@ class GameProducer:
         assert self.expects_batter_up
         if self.game_update['topOfInning']:
             self.active_recorder = self.away_recorder
+            self.inactive_recorder = self.home_recorder
         else:
             self.active_recorder = self.home_recorder
+            self.inactive_recorder = self.away_recorder
 
         first_batter = self.batter().id
         self.batting_team().advance_batter()
@@ -373,28 +375,41 @@ class GameProducer:
         self._player_to_base(self.batter(), 0)  # no base instincts
         self._end_atbat()
 
-    def _fielding_out(self, out_text: str, pitch: Pitch):
-        assert self.expects_pitch
+    def _find_out_fielder(self, out_text, pitch):
+        def description(fielder_name: str):
+            # Can't match description using batter name because of haunting.
+            # Also have to leave off the period because of 's shell
+            return f" hit a {out_text} to {fielder_name}"
 
-        def description(fielder: PlayerState):
-            # Can't match description using batter name because of haunting
-            return f" hit a {out_text} to {fielder.name}."
-
-        batter = self.batter()
-        # Find the fielder
         if (pitch.pitch_type == PitchType.FIELDERS_CHOICE or
                 pitch.pitch_type == PitchType.DOUBLE_PLAY):
             # This was a FC or DP converted to a normal out. Pick random fielder
-            fielder = random.choice(self.fielding_team().lineup)
-        else:
-            try:
-                fielder = next(f for f in self.fielding_team().lineup
-                               if description(f) in pitch.original_text)
-            except StopIteration:
-                raise RuntimeError("Couldn't find fielder")
+            return random.choice(self.fielding_team().lineup)
 
-        self.game_update['lastUpdate'] = \
+        possible_fielders = [self.fielding_team().lineup[idx] for name, idx
+                             in self.inactive_recorder.replacement_map.items()
+                             if description(name) in pitch.original_text]
+
+        if possible_fielders:
+            return possible_fielders[0]
+
+        possible_fielders = [f for f in self.fielding_team().lineup
+                             if description(f.name) in pitch.original_text]
+
+        if possible_fielders:
+            return possible_fielders[0]
+
+        raise RuntimeError("Couldn't find fielder")
+
+    def _fielding_out(self, out_text: str, pitch: Pitch):
+        assert self.expects_pitch
+
+        batter = self.batter()
+        fielder = self._find_out_fielder(out_text, pitch)
+
+        self.game_update['lastUpdate'] = (
             f"{batter.name} hit a {out_text} to {fielder.name}."
+        )
 
         self._maybe_advance_baserunners(pitch)
         self._out()

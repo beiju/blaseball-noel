@@ -196,6 +196,9 @@ class GameRecorder:
         self.prev_known_game_event: Optional[dict] = None
         self.advancements: Dict[str, List[int]] = defaultdict(lambda: [])
 
+        # Dict of replacement player names to replaced player indices
+        self.replacement_map = {}
+
     def record_event(self, feed_event: dict, game_update: Optional[dict]):
         update_type = feed_event['type']
 
@@ -299,6 +302,7 @@ class GameRecorder:
                 pass  # must have been the other team
             else:
                 self.team.lineup[idx] = get_replacement(replacement_id)
+                self.replacement_map[self.team.lineup[idx].name] = idx
                 return  # gotta early return or it might un-swap
 
     def get_advancements(self, game_event: Optional[dict], bases_from_hit: int):
