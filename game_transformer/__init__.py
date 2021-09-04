@@ -28,6 +28,8 @@ def generate_game(game_id):
         new_updates.append(StampedUpdate(timestamp, update))
         timestamp += timedelta(seconds=5)
 
+    # Last update must be finalized
+    assert new_updates[-1].data['finalized']
     return new_updates
 
 

@@ -28,7 +28,10 @@ class GameProducer:
         self.expects_game_end = False
 
         # Updates with play count 0 have the wrong timestamp
-        time_update = next(u for u in updates if u['data']['playCount'] > 0)
+        try:
+            time_update = next(u for u in updates if u['data']['playCount'] > 0)
+        except StopIteration:
+            raise RuntimeError("Couldn't get timestamp for game")
         self.game_start = time_update['timestamp']
 
         # Chronicler adds timestamp so I can depend on it existing
@@ -276,7 +279,10 @@ class GameProducer:
             self.batter().id, self.batting_team().appearance_count)
 
     def _pitch(self):
-        pitch: Pitch = next(self.active_pitch_source)
+        try:
+            pitch: Pitch = next(self.active_pitch_source)
+        except StopIteration:
+            raise RuntimeError("Ran out of pitches")
         assert pitch.batter_id == self.batter().id
 
         if pitch.pitch_type == PitchType.BALL:
@@ -359,8 +365,11 @@ class GameProducer:
 
         batter = self.batter()
         # Find the fielder
-        fielder = next(fielder for fielder in self.fielding_team().lineup
-                       if description(fielder) in pitch.original_text)
+        try:
+            fielder = next(fielder for fielder in self.fielding_team().lineup
+                           if description(fielder) in pitch.original_text)
+        except StopIteration:
+            raise RuntimeError("Couldn't find fielder")
 
         self.game_update['lastUpdate'] = description(fielder)
 
