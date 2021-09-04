@@ -1,4 +1,5 @@
 import random
+import re
 from copy import deepcopy
 from typing import Optional, List
 
@@ -9,6 +10,21 @@ HIT_NAME = {
     0: 'Single',
     1: 'Double',
     2: 'Triple',
+}
+
+BASE_FROM_NAME = {
+    'first': 0,
+    'second': 1,
+    'third': 2,
+    'fourth': 3,
+    'fifth': 3,
+}
+
+NAME_FROM_BASE = {
+    0: 'first',
+    1: 'second',
+    2: 'third',
+    3: 'fourth'
 }
 
 
@@ -293,12 +309,12 @@ class GameProducer:
             self._fielding_out("ground out", pitch)
         elif pitch.pitch_type == PitchType.FLYOUT:
             self._fielding_out("flyout", pitch)
-        elif pitch.pitch_type == PitchType.SINGLE:
-            self._hit(0, pitch)
-        elif pitch.pitch_type == PitchType.DOUBLE:
-            self._hit(1, pitch)
-        elif pitch.pitch_type == PitchType.TRIPLE:
-            self._hit(2, pitch)
+        elif pitch.pitch_type == PitchType.FIELDERS_CHOICE:
+            self._fielders_choice(pitch)
+        elif pitch.pitch_type == PitchType.DOUBLE_PLAY:
+            self._double_play(pitch)
+        elif pitch.pitch_type == PitchType.HIT:
+            self._hit(pitch)
         elif pitch.pitch_type == PitchType.STRIKE_SWINGING:
             self._strike("swinging")
         elif pitch.pitch_type == PitchType.STRIKE_LOOKING:
@@ -361,20 +377,79 @@ class GameProducer:
         assert self.expects_pitch
 
         def description(fielder: PlayerState):
-            return f"{batter.name} hit a {out_text} to {fielder.name}."
+            # Can't match description using batter name because of haunting
+            return f" hit a {out_text} to {fielder.name}."
 
         batter = self.batter()
         # Find the fielder
-        try:
-            fielder = next(fielder for fielder in self.fielding_team().lineup
-                           if description(fielder) in pitch.original_text)
-        except StopIteration:
-            raise RuntimeError("Couldn't find fielder")
+        if (pitch.pitch_type == PitchType.FIELDERS_CHOICE or
+                pitch.pitch_type == PitchType.DOUBLE_PLAY):
+            # This was a FC or DP converted to a normal out. Pick random fielder
+            fielder = random.choice(self.fielding_team().lineup)
+        else:
+            try:
+                fielder = next(f for f in self.fielding_team().lineup
+                               if description(f) in pitch.original_text)
+            except StopIteration:
+                raise RuntimeError("Couldn't find fielder")
 
-        self.game_update['lastUpdate'] = description(fielder)
+        self.game_update['lastUpdate'] = \
+            f"{batter.name} hit a {out_text} to {fielder.name}."
 
         self._maybe_advance_baserunners(pitch)
         self._out()
+
+    def _eligible_for_runner_out(self, pitch: Pitch):
+        # If only one out remaining, convert to ground out
+        if self.game_update['halfInningOuts'] >= 2:
+            return False
+
+        # If nobody is on base, convert to ground out
+        if not self.game_update['basesOccupied']:
+            return False
+
+        return True
+
+    def _fielders_choice(self, pitch: Pitch):
+        if not self._eligible_for_runner_out(pitch):
+            return self._fielding_out("ground out", pitch)
+
+        # Record the out on the out player
+        player_out_index, base_name = self._find_player_out_fc(pitch)
+        player_out_name = self.game_update['baseRunnerNames'][player_out_index]
+        player_out_base = self.game_update['basesOccupied'][player_out_index]
+        self._out(for_batter=False)
+        self._remove_baserunner_by_index(player_out_index)
+
+        if base_name is None:
+            # Assume they were advancing 1 base.
+            base_name = NAME_FROM_BASE[player_out_base + 1]
+
+        # Record the hit for the batter
+        self._hit(pitch)
+
+        # Overwrite update text
+        self.game_update['lastUpdate'] = (
+            f"{player_out_name} out at {base_name} base.\n"
+            f"{self.batter().name} reaches on fielder's choice."
+        )
+
+    def _double_play(self, pitch: Pitch):
+        if not self._eligible_for_runner_out(pitch):
+            return self._fielding_out("ground out", pitch)
+
+        # Record the out on the out player
+        player_out_index = self._find_player_out_dp(pitch)
+        self._out(for_batter=False)
+        self._remove_baserunner_by_index(player_out_index)
+
+        # Record the out for the batter
+        self._fielding_out("ground out", pitch)
+
+        # Overwrite update text
+        self.game_update['lastUpdate'] = (
+            f"{self.batter().name} hit into a double play!"
+        )
 
     def _maybe_advance_baserunners(self, pitch: Pitch):
         next_occupied_base = None
@@ -510,14 +585,15 @@ class GameProducer:
 
         self._end_atbat()
 
-    def _hit(self, to_base: int, pitch: Pitch):
+    def _hit(self, pitch: Pitch):
+        # Note this function may receive a PitchType.FIELDERS_CHOICE pitch
         assert self.expects_pitch
 
         batter = self.batter()
         self.game_update['lastUpdate'] = (f"{batter.name} hit a "
-                                          f"{HIT_NAME[to_base]}!")
+                                          f"{HIT_NAME[pitch.base_reached]}!")
 
-        self._player_to_base(batter, to_base)
+        self._player_to_base(batter, pitch.base_reached)
         self._maybe_advance_baserunners(pitch)
 
         self._end_atbat()
@@ -610,3 +686,67 @@ class GameProducer:
 
         self.expects_pitch = False
         self.expects_game_end = True
+
+    def _find_player_out_fc(self, pitch):
+        # If only one baserunner, it must be them
+        if len(self.game_update['baseRunners']) == 1:
+            return 0, None
+
+        match = re.search(r"out at (first|second|third|fourth|fifth) base",
+                          pitch.original_text)
+        assert match is not None
+        out_at_base = BASE_FROM_NAME[match.group(1)]
+
+        # If the player from the original out is on base, prefer them
+        for index, name in enumerate(self.game_update['baseRunnerNames']):
+            if (name + " out at ") in pitch.original_text:
+                # If the base they were out at is still plausible, use it. This
+                # means the base they were out at is after their current base
+                # and there aren't any occupied bases in between.
+                # Haha this code turned into a mess. Good luck.
+                current_base = self.game_update['basesOccupied'][index]
+                if out_at_base <= current_base:
+                    return index, None
+                for base_between in range(current_base + 1, out_at_base):
+                    try:
+                        between_i = \
+                            self.game_update['basesOccupied'].find(base_between)
+                    except ValueError:
+                        # Then it's plausible; check next batter
+                        continue
+                    else:
+                        # Only if they're going to advance past it
+                        between_id = self.game_update['baseRunners'][between_i]
+                        if (between_id in pitch.advancements and
+                                base_between + pitch.advancements[between_id] >=
+                                out_at_base):
+                            # Then it's plausible; check next batter
+                            continue
+                    # Then it's not plausible, return None
+                    return index, None
+                # If I didn't return None yet, the original base is plausible
+                return index, match.group(1)
+
+        # Find whichever player can advance to whichever base the original out
+        # was on. Iterates from third to first, which is forwards in the list.
+        for index, base in enumerate(self.game_update['basesOccupied']):
+            if base < out_at_base:
+                return index, match.group(1)
+
+        # If all else fails, default to the player farthest from scoring
+        return len(self.game_update['baseRunners']) - 1, None
+
+    def _find_player_out_dp(self, pitch):
+        # If only one baserunner, it must be them
+        if len(self.game_update['baseRunners']) == 1:
+            return 0
+
+        # Assume it's the farthest-from-home player who isn't in advancements.
+        # Need to iterate the list backwards for this.
+        for runner_i in reversed(range(len(self.game_update['baseRunners']))):
+            runner_id = self.game_update['baseRunners'][runner_i]
+            if runner_id not in pitch.advancements:
+                return runner_i
+
+        # If all else fails, default to the player farthest from scoring
+        return len(self.game_update['baseRunners']) - 1

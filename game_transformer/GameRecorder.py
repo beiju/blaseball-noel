@@ -19,9 +19,7 @@ class PitchType(Enum):
     STRIKE_LOOKING = auto()
     STRIKE_SWINGING = auto()
     FOUL = auto()
-    SINGLE = auto()
-    DOUBLE = auto()
-    TRIPLE = auto()
+    HIT = auto()
     HOME_RUN = auto()
     FLYOUT = auto()
     GROUND_OUT = auto()
@@ -34,14 +32,13 @@ class Pitch:
     batter_id: str
     appearance_count: int
     pitch_type: PitchType
+    base_reached: int  # if player reached base
     original_text: str
     advancements: Dict[str, int]
 
 
 SIMPLE_PITCH_TYPES = {
     5: PitchType.BALL,  # walk -> ball
-    7: PitchType.FLYOUT,
-    8: PitchType.GROUND_OUT,
     9: PitchType.HOME_RUN,
     14: PitchType.BALL,
     15: PitchType.FOUL,
@@ -110,41 +107,59 @@ NON_PITCH_TYPES = {
 }
 
 
-def get_pitch_type(feed_event: Dict[str, Any]):
+def get_pitch_type(feed_event: Dict[str, Any],
+                   game_update: Optional[Dict[str, Any]]):
     event_type: int = feed_event['type']
     description = feed_event['description']
 
     if event_type in SIMPLE_PITCH_TYPES:
-        return SIMPLE_PITCH_TYPES[event_type]
+        return SIMPLE_PITCH_TYPES[event_type], None
     elif event_type == 6:
         if " strikes out looking." in description:
-            return PitchType.STRIKE_LOOKING
+            return PitchType.STRIKE_LOOKING, None
         elif " strikes out swinging." in description:
-            return PitchType.STRIKE_SWINGING
+            return PitchType.STRIKE_SWINGING, None
         else:
             assert ("charmed" in description and
                     "strike out willingly" in description)
-            return None  # Fill this with random pitches
-    elif event_type == 10:
+            return None
+    elif event_type == 7:  # flyout
+        # Seems like flyouts are never FCs (makes sense) or DPs (sure, I guess)
+        assert " hit a flyout to " in description
+        return PitchType.FLYOUT, None
+    elif event_type == 8:  # ground out
+        if " hit a ground out to " in description:
+            return PitchType.GROUND_OUT, None
+        elif " hit into a double play!" in description:
+            return PitchType.DOUBLE_PLAY, None
+        else:
+            assert " reaches on fielder's choice." in description
+            if game_update is None:
+                return PitchType.FIELDERS_CHOICE, None
+            else:
+                # The batter must be the last one in the array
+                return (PitchType.FIELDERS_CHOICE,
+                        game_update['basesOccupied'][-1])
+    elif event_type == 10:  # hit
         if " hits a Single!" in description:
-            return PitchType.SINGLE
+            return PitchType.HIT, 0
         elif " hits a Double!" in description:
-            return PitchType.DOUBLE
+            return PitchType.HIT, 1
         elif " hits a Triple!" in description:
-            return PitchType.TRIPLE
+            return PitchType.HIT, 2
         elif " hits a Quadruple!" in description:
             # downgrades ur quadruple
-            return PitchType.TRIPLE
+            return PitchType.HIT, 2
         else:
             assert " home run!" in description or " grand slam!" in description
-            return PitchType.HOME_RUN
+            return PitchType.HOME_RUN, None
     elif event_type == 13:
         if "Strike, swinging" in description:
-            return PitchType.STRIKE_SWINGING
+            return PitchType.STRIKE_SWINGING, None
         else:
             assert ("Strike, looking" in description or
                     "Strike, flinching" in description)
-            return PitchType.STRIKE_LOOKING
+            return PitchType.STRIKE_LOOKING, None
     elif event_type in NON_PITCH_TYPES:
         return None
 
@@ -181,7 +196,7 @@ class GameRecorder:
         self.prev_known_game_event: Optional[dict] = None
         self.advancements: Dict[str, List[int]] = defaultdict(lambda: [])
 
-    def record_event(self, feed_event: dict, game_event: Optional[dict]):
+    def record_event(self, feed_event: dict, game_update: Optional[dict]):
         update_type = feed_event['type']
 
         if update_type == 12:  # Batter up
@@ -189,20 +204,21 @@ class GameRecorder:
         elif update_type == 23:  # shellsewhere
             self.team.advance_batter()
         else:
-            pitch_type = get_pitch_type(feed_event)
-            if pitch_type is not None:
-                advancements = self.get_advancements(
-                    game_event, bases_from_pitch(pitch_type))
+            pitch_info = get_pitch_type(feed_event, game_update)
+            if pitch_info is not None:
+                pitch_type, base_reached = pitch_info
+                advancements = self.get_advancements(game_update, base_reached)
                 self.pitches.append(Pitch(
                     batter_id=self.team.batter().id,
                     appearance_count=self.team.appearance_count,
                     pitch_type=pitch_type,
+                    base_reached=base_reached,
                     original_text=feed_event['description'],
                     advancements=advancements
                 ))
 
-        if game_event is not None:
-            self.prev_known_game_event = game_event
+        if game_update is not None:
+            self.prev_known_game_event = game_update
 
     def _batter_up(self, feed_event: dict):
         # Figure out whether the batter actually advanced
@@ -303,7 +319,8 @@ class GameRecorder:
                 # Runners shouldn't be credited for the bases they advance as
                 # a result of the hit. Not sure that applies to baseball but it
                 # does apply to blaseball.
-                base_before += bases_from_hit
+                if bases_from_hit is not None:
+                    base_before += bases_from_hit
                 assert base_before <= base_after
 
                 # If the base in front of them was occupied, their "decision"
