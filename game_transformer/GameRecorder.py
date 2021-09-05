@@ -285,13 +285,16 @@ class GameRecorder:
                 del self.active_steal_decisions[runner_id]
 
     def _record_steal_decision(self, feed_event, runner_id):
+        runners = [r for r in self.team.lineup if r.id == runner_id]
+        assert len(runners) == 1
+        runner = runners[0]
+
         decision = StealDecision.STAY
-        if feed_event['type'] == 4 and runner_id in feed_event['playerTags']:
-            if f" steals" in feed_event['description']:
-                decision = StealDecision.STEAL
-            elif f" gets caught stealing" in feed_event['description']:
-                # That's right. They decided to caught.
-                decision = StealDecision.CAUGHT
+        if f"{runner.name} steals" in feed_event['description']:
+            decision = StealDecision.STEAL
+        elif f"{runner.name} gets caught stealing" in feed_event['description']:
+            # That's right. They decided to caught.
+            decision = StealDecision.CAUGHT
         self.active_steal_decisions[runner_id].append(decision)
 
     def has_pitches_for(self, player_id):
@@ -348,7 +351,7 @@ class GameRecorder:
 
     def get_advancements(self, feed_event: dict,
                          game_update: Optional[dict],
-                         bases_from_hit: int):
+                         base_from_hit: int):
         # just because the variable name is too long
         prev_update = self.prev_known_game_update
 
@@ -369,8 +372,8 @@ class GameRecorder:
                 # Runners shouldn't be credited for the bases they advance as
                 # a result of the hit. Not sure that applies to baseball but it
                 # does apply to blaseball.
-                if bases_from_hit is not None:
-                    base_before += bases_from_hit
+                if base_from_hit is not None:
+                    base_before += base_from_hit + 1  # zero indexed
                 assert base_before <= base_after
 
                 # If the base in front of them was occupied, their "decision"
@@ -378,7 +381,8 @@ class GameRecorder:
                 # a player that was 2 bases ahead of them stopped them from
                 # advancing by 2, then tough. It'll be recorded as them deciding
                 # to "only" advance by 1.
-                if base_before + 1 not in bases_before.values():
+                if not (base_before == base_after and
+                        base_after + 1 in bases_after.values()):
                     advancements[runner] = base_after - base_before
 
         # Find players who advanced all the way to home
@@ -388,8 +392,8 @@ class GameRecorder:
                     in feed_event['description']):
                 runner_id = prev_update['baseRunners'][runner_i]
                 base_before = prev_update['basesOccupied'][runner_i]
-                if bases_from_hit is not None:
-                    base_before += bases_from_hit
+                if base_from_hit is not None:
+                    base_before += base_from_hit
                 advancements[runner_id] = max(0, 3 - base_before)
 
         for runner_id, advancement in advancements.items():
