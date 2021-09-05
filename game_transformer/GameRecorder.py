@@ -383,7 +383,9 @@ class GameRecorder:
 
         # Find players who advanced all the way to home
         for runner_i, runner_name in enumerate(prev_update['baseRunnerNames']):
-            if f"{runner_name} scores" in feed_event['description']:
+            if (f"{runner_name} scores" in feed_event['description'] or
+                    f"{runner_name} tags up and scores"
+                    in feed_event['description']):
                 runner_id = prev_update['baseRunners'][runner_i]
                 base_before = prev_update['basesOccupied'][runner_i]
                 if bases_from_hit is not None:

@@ -187,7 +187,6 @@ class GameProducer:
         else:
             raise RuntimeError("Unexpected state in GameProducer")
 
-        self._update_scores()
         self.game_update['playCount'] += 1
         # one thousand plays ought to be enough for anyone
         assert self.game_update['playCount'] < 1_000
@@ -302,6 +301,7 @@ class GameProducer:
         did_steal = self._maybe_steal()
 
         if did_steal:
+            self._update_scores(None)
             return
 
         try:
@@ -332,6 +332,8 @@ class GameProducer:
             self._home_run()
         else:
             raise RuntimeError("Unexpected pitch type")
+
+        self._update_scores(pitch)
 
     def _walk(self):
         self.game_update['lastUpdate'] = f"{self.batter().name} draws a walk."
@@ -584,14 +586,21 @@ class GameProducer:
 
         self._end_atbat()
 
-    def _update_scores(self):
+    def _update_scores(self, pitch: Optional[Pitch]):
         runs_scored = 0
         for runner_i in reversed(range(len(self.game_update['basesOccupied']))):
             if self.game_update['basesOccupied'][runner_i] < 3:  # no fifth base
                 continue
 
             player_name = self.game_update['baseRunnerNames'][runner_i]
-            self.game_update['lastUpdate'] += f"\n{player_name} scores!"
+
+            if pitch and pitch.pitch_type == PitchType.FLYOUT:
+                description = f"\n{player_name} tags up and scores!"
+            elif pitch and pitch.pitch_type == PitchType.GROUND_OUT:
+                description = f"\n{player_name} advances on the sacrifice."
+            else:
+                description = f"\n{player_name} scores!"
+            self.game_update['lastUpdate'] += description
 
             self._remove_baserunner_by_index(runner_i)
             runs_scored += self._score_runs(1)
