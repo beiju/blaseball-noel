@@ -1,5 +1,7 @@
 # What?
 
+https://noel.beiju.me/
+
 Noel dares to ask: what if blaseball was baseball? It reinterprets every* game 
 using just the rules of Baseball. You get 3 strikes per out, 3 outs per inning,
 4 bases on the field, and 0 players set on fire.
@@ -147,3 +149,9 @@ for orders of magnitude less effort.
 [eventually]: https://github.com/alisww/eventually
 [blasement]: https://github.com/UnderMybrella/the-blasement
 [cursed]: https://cursed.sibr.dev/
+
+# Wait I forgot to mention something
+
+"Blaseball" is replaced with "Baseball" throughout the entire site (except the
+`_before` pages). The code to do that is in a script tag in the index.html and
+it's some high quality cursed material. Recommended reading.
