@@ -1,10 +1,11 @@
 import random
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum, auto
 from itertools import chain
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict, List, Tuple
 
 from blaseball_mike.models import Player, Team
 from dateutil.parser import isoparse
@@ -37,6 +38,12 @@ class Pitch:
     advancements: Dict[str, int]
 
 
+class StealDecision(Enum):
+    STAY = auto()
+    STEAL = auto()
+    CAUGHT = auto()
+
+
 SIMPLE_PITCH_TYPES = {
     5: PitchType.BALL,  # walk -> ball
     9: PitchType.HOME_RUN,
@@ -44,6 +51,7 @@ SIMPLE_PITCH_TYPES = {
     15: PitchType.FOUL,
     27: PitchType.BALL,  # mild pitch -> ball
 }
+
 NON_PITCH_TYPES = {
     0,  # let's go
     1,  # play ball
@@ -171,17 +179,6 @@ def player_bases(game_event):
                                                  game_event['basesOccupied'])}
 
 
-def bases_from_pitch(pitch_type: PitchType):
-    if pitch_type == PitchType.SINGLE:
-        return 1
-    elif pitch_type == PitchType.DOUBLE:
-        return 2
-    elif pitch_type == PitchType.TRIPLE:
-        return 3
-
-    return 0
-
-
 class GameRecorder:
     def __init__(self, updates, prefix):
         self.prefix = prefix
@@ -196,6 +193,9 @@ class GameRecorder:
         self.prev_known_game_update: Optional[dict] = None
         self.advancements: Dict[str, List[int]] = defaultdict(lambda: [])
 
+        self.steal_decisions: Dict[Tuple[str, int], List[StealDecision]] = {}
+        self.active_steal_decisions: Dict[str, List[StealDecision]] = {}
+
         # Dict of replacement player names to replaced player indices
         self.replacement_map = {}
 
@@ -208,6 +208,9 @@ class GameRecorder:
             self.team.advance_batter()
         else:
             pitch_info = get_pitch_type(feed_event, game_update)
+            if pitch_info is not None or feed_event['type'] == 4:
+                self._record_steals(feed_event, game_update)
+
             if pitch_info is not None:
                 pitch_type, base_reached = pitch_info
                 advancements = self.get_advancements(
@@ -254,6 +257,43 @@ class GameRecorder:
 
         raise RuntimeError("Who is batting?")
 
+    def _record_steals(self, feed_event: dict, game_update: Optional[dict]):
+        self._add_and_remove_from_bases(feed_event)
+
+        # Record steal decisions for known on-base players
+        for runner_id in self.active_steal_decisions.keys():
+            self._record_steal_decision(feed_event, runner_id)
+
+        if game_update is None:
+            return
+
+        # Create steal decision records for newly-appeared players
+        for runner_id in set(game_update['baseRunners']):
+            if runner_id in self.active_steal_decisions:
+                # Then we've already dealt with them
+                continue
+
+            self._add_to_bases(runner_id)
+            self._record_steal_decision(feed_event, runner_id)
+
+        # Close out steal decision records for disappeared players
+        # Have to make list of keys, otherwise modifying the dict is illegal
+        for runner_id in list(self.active_steal_decisions.keys()):
+            if runner_id not in game_update['baseRunners']:
+                # Delete the record from active decisions. The list is still
+                # accessible from self.steal_decisions
+                del self.active_steal_decisions[runner_id]
+
+    def _record_steal_decision(self, feed_event, runner_id):
+        decision = StealDecision.STAY
+        if feed_event['type'] == 4 and runner_id in feed_event['playerTags']:
+            if f" steals" in feed_event['description']:
+                decision = StealDecision.STEAL
+            elif f" gets caught stealing" in feed_event['description']:
+                # That's right. They decided to caught.
+                decision = StealDecision.CAUGHT
+        self.active_steal_decisions[runner_id].append(decision)
+
     def has_pitches_for(self, player_id):
         return any(pitch.batter_id == player_id for pitch in self.pitches)
 
@@ -268,15 +308,15 @@ class GameRecorder:
 
         appearance_pitches = filter(pitch_filter, self.pitches)
 
-        def random_pitches():
-            player_pitches = [pitch for pitch in self.pitches
-                              if pitch.batter_id == player_id]
-            while True:
-                yield random.choice(player_pitches)
-
         # Return pitches from this appearance until they are exhausted, then
         # return random pitches from this batter during this game
-        return chain(appearance_pitches, random_pitches())
+        return chain(appearance_pitches, self._generate_pitches(player_id))
+
+    def _generate_pitches(self, player_id):
+        player_pitches = [pitch for pitch in self.pitches
+                          if pitch.batter_id == player_id]
+        while True:
+            yield random.choice(player_pitches)
 
     def reload_lineup(self, feed_event: dict):
         timestamp = isoparse(feed_event['created']) + timedelta(seconds=180)
@@ -348,9 +388,10 @@ class GameRecorder:
                 base_before = prev_update['basesOccupied'][runner_i]
                 if bases_from_hit is not None:
                     base_before += bases_from_hit
-                advancements[runner_id] = 3 - base_before
+                advancements[runner_id] = max(0, 3 - base_before)
 
         for runner_id, advancement in advancements.items():
+            assert advancement >= 0
             self.advancements[runner_id].append(advancement)
 
         return advancements
@@ -362,3 +403,46 @@ class GameRecorder:
             # This means there were no advancement opportunities recorded.
             # Sucks to be you. You don't get to advance.
             return 0
+
+    def _add_and_remove_from_bases(self, feed_event):
+        if feed_event['type'] in {5, 10}:  # walk, hit
+            # First player in the tags gets on base, all the rest score
+            batter_id, *scorer_ids = feed_event['playerTags']
+            # Charm puts the batter id in twice
+            if " charms " in feed_event['description']:
+                scorer_ids.pop(0)
+            # Ugh so does heating up
+            if (" is Heating Up!" in feed_event['description'] or
+                    " is Red Hot!" in feed_event['description']):
+                scorer_ids.pop()
+            self._add_to_bases(batter_id)
+            for scorer_id in scorer_ids:
+                del self.active_steal_decisions[scorer_id]
+        elif feed_event['type'] in {2, 9}:  # half-inning change, home run
+            # Nobody's on base any more
+            self.active_steal_decisions.clear()
+
+        # TODO FC, double play. These are really annoying because player IDs
+        #  are not included in the feed.
+
+    def _add_to_bases(self, runner_id):
+        steal_key = (runner_id, self.team.appearance_count)
+        assert steal_key not in self.steal_decisions
+        self.active_steal_decisions[runner_id] = []
+        self.steal_decisions[steal_key] = self.active_steal_decisions[runner_id]
+
+    def get_steal_source(self, player_id, appearance_count):
+        key = (player_id, appearance_count)
+        recorded_steals = self.steal_decisions.get(key, [])
+
+        return chain(recorded_steals, self._generate_steals(player_id))
+
+    def _generate_steals(self, player_id):
+        all_steals = [decision
+                      for (runner_id, _), decisions
+                      in self.steal_decisions.items()
+                      if runner_id == player_id
+                      for decision in decisions]
+
+        while True:
+            yield random.choice(all_steals)

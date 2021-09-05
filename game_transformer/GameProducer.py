@@ -3,7 +3,8 @@ import re
 from copy import deepcopy
 from typing import Optional, List
 
-from game_transformer.GameRecorder import GameRecorder, PitchType, Pitch
+from game_transformer.GameRecorder import GameRecorder, PitchType, Pitch, \
+    StealDecision
 from game_transformer.state import PlayerState, TeamState, first_truthy
 
 HIT_NAME = {
@@ -55,6 +56,7 @@ class GameProducer:
         self.away = TeamState(updates, self.game_start, 'away')
 
         self.active_pitch_source = None
+        self.steal_sources = {}
 
         self.game_update = {
             'id': updates[0]['data']['id'],
@@ -297,6 +299,11 @@ class GameProducer:
             self.batter().id, self.batting_team().appearance_count)
 
     def _pitch(self):
+        did_steal = self._maybe_steal()
+
+        if did_steal:
+            return
+
         try:
             pitch: Pitch = next(self.active_pitch_source)
         except StopIteration:
@@ -324,50 +331,7 @@ class GameProducer:
         elif pitch.pitch_type == PitchType.HOME_RUN:
             self._home_run()
         else:
-            breakpoint()
-
-    def update_base_steal(self, feed_event: dict, game_update: Optional[dict]):
-        assert self.expects_pitch
-
-        parsed = Parsers.steal.parse(feed_event['description'])
-        parsed_steal, *parsed_extras = parsed.children
-        assert parsed_steal.data in {'stolen_base', 'caught_stealing'}
-        stealer_name, base_name = parsed_steal.children
-        base_stolen = BASE_NUM_FOR_NAME[base_name]
-        # Find the baserunner who is one before the base they tried to
-        # steal. You can't steal to any other base (with this event type)
-        stealer_idx = self.game_update['basesOccupied'].index(base_stolen - 1)
-        assert self.game_update['baseRunnerNames'][stealer_idx] == stealer_name
-
-        runs_scored = 0
-        if parsed_steal.data == 'stolen_base':
-            # Must do this before advancing baserunners or the indices are off
-            self.game_update['basesOccupied'][stealer_idx] += 1
-            expects_extras = False
-
-            if parsed_extras and parsed_extras[0].data == 'blaserunning':
-                parsed_blaserunning = parsed_extras.pop(0)
-                parsed_blaserunner_name, = parsed_blaserunning.children
-                assert stealer_name == parsed_blaserunner_name
-                runs_scored += self._score_runs(0.2)
-                expects_extras = True
-
-            if base_stolen + 1 == self.game_update[self.prefix() + 'Bases']:
-                runs_scored += self._score_player(stealer_name)
-                expects_extras = True
-
-            if expects_extras:
-                self._apply_scoring_extras(parsed_extras)
-            else:
-                assert len(parsed_extras) == 0
-        else:
-            assert parsed_steal.data == 'caught_stealing'
-
-            self._remove_baserunner_by_index(stealer_idx)
-            self._out(game_update, for_batter=False)
-
-        self._record_runs(runs_scored)
-        self.game_update['lastUpdate'] = feed_event['description']
+            raise RuntimeError("Unexpected pitch type")
 
     def _walk(self):
         self.game_update['lastUpdate'] = f"{self.batter().name} draws a walk."
@@ -484,6 +448,7 @@ class GameProducer:
                 advance_by = min(advance_by, next_occupied_base - 1 - base)
 
             # Record advancement
+            assert advance_by >= 0
             self.game_update['basesOccupied'][runner_i] += advance_by
             next_occupied_base = self.game_update['basesOccupied'][runner_i]
 
@@ -520,6 +485,7 @@ class GameProducer:
         self.game_update['baseRunnerMods'] = []
         self.game_update['basesOccupied'] = []
         self.game_update['baserunnerCount'] = 0
+        self.steal_sources = {}
 
         self.game_update['halfInningOuts'] = 0
         self.game_update['phase'] = 3
@@ -587,15 +553,15 @@ class GameProducer:
         elif num_runners == 3:
             desc = f"{batter.name} hit a grand slam!"
         else:
-            desc = f"{batter.name} hit a {num_runners}-run home run!"
+            desc = f"{batter.name} hit a {num_runners + 1}-run home run!"
 
-        # Yeet the batter straight to 4th. This pushes everyone else into
-        # scoring range
-        self._player_to_base(batter, 3)
-        # Score runners now so I can override the description
-        self._update_scores()
+        # Score everyone directly
+        runs_scored = self._score_runs(1)
+        for runner_i in reversed(range(len(self.game_update['basesOccupied']))):
+            self._remove_baserunner_by_index(runner_i)
+            runs_scored += self._score_runs(1)
+        self._record_runs(runs_scored)
 
-        # Set description after updating scores to override scorer names
         self.game_update['lastUpdate'] = desc
 
         self._end_atbat()
@@ -605,7 +571,7 @@ class GameProducer:
         assert self.expects_pitch
 
         batter = self.batter()
-        self.game_update['lastUpdate'] = (f"{batter.name} hit a "
+        self.game_update['lastUpdate'] = (f"{batter.name} hits a "
                                           f"{HIT_NAME[pitch.base_reached]}!")
 
         # Everyone always advances at least the number of bases corresponding to
@@ -653,11 +619,14 @@ class GameProducer:
             self.game_update['scoreUpdate'] = f"{runs_scored} Runs scored!"
 
     def _remove_baserunner_by_index(self, list_index):
-        self.game_update['baseRunners'].pop(list_index)
+        runner_id = self.game_update['baseRunners'].pop(list_index)
         self.game_update['baseRunnerNames'].pop(list_index)
         self.game_update['baseRunnerMods'].pop(list_index)
         self.game_update['basesOccupied'].pop(list_index)
         self.game_update['baserunnerCount'] -= 1
+
+        # Don't need this steal source any more
+        del self.steal_sources[runner_id]
 
     def _score_runs(self, runs: float):
         self.game_update[self.prefix() + 'Score'] += runs
@@ -687,6 +656,15 @@ class GameProducer:
             highest_occupied_base = self.game_update['basesOccupied'][runner_i]
 
         # Scoring players is handled centrally as the last step of a pitch
+
+        # Player can now steal! Get a source of steal decisions
+        self.steal_sources[batter.id] = self.active_recorder.get_steal_source(
+            batter.id, self.batting_team().appearance_count)
+        # The steal source contains an extra decision (from the event where the
+        # player got on base, which shouldn't have a decision but does for
+        # reasons) and it's hard to fix it to not record that decision. Much
+        # easier to just always discard the first decision.
+        assert next(self.steal_sources[batter.id]) == StealDecision.STAY
 
     def _inning_end(self):
         assert self.expects_inning_end
@@ -770,3 +748,52 @@ class GameProducer:
 
         # If all else fails, default to the player farthest from scoring
         return len(self.game_update['baseRunners']) - 1
+
+    def _maybe_steal(self):
+        stole_base = False
+        for runner_i, runner_id in enumerate(self.game_update['baseRunners']):
+            try:
+                decision = next(self.steal_sources[runner_id])
+            except StopIteration:
+                raise RuntimeError("Ran out of steals")
+
+            # If someone already stole this turn I still have to consume the
+            # decision to keep things synced but I discard it
+            if stole_base:
+                continue
+
+            # Likewise if they can't steal I still have to consume the decision
+            base = self.game_update['basesOccupied'][runner_i]
+            if base + 1 in self.game_update['basesOccupied']:
+                # Can't steal, a player is in the way
+                continue
+
+            if decision == StealDecision.STEAL:
+                self._steal_base(runner_i)
+                stole_base = True
+            elif decision == StealDecision.CAUGHT:
+                self._caught_stealing(runner_i)
+                stole_base = True
+
+        return stole_base
+
+    def _steal_base(self, runner_i: int):
+        self.game_update['basesOccupied'][runner_i] += 1
+        thief_name = self.game_update['baseRunnerNames'][runner_i]
+        base_name = NAME_FROM_BASE[self.game_update['basesOccupied'][runner_i]]
+
+        self.game_update['lastUpdate'] = (
+            f"{thief_name} steals {base_name} base!"
+        )
+
+    def _caught_stealing(self, runner_i: int):
+        base_attempted = self.game_update['basesOccupied'][runner_i] + 1
+        thief_name = self.game_update['baseRunnerNames'][runner_i]
+        base_name = NAME_FROM_BASE[base_attempted]
+
+        self._remove_baserunner_by_index(runner_i)
+        self._out(for_batter=False)
+
+        self.game_update['lastUpdate'] = (
+            f"{thief_name} gets caught stealing {base_name} base."
+        )
