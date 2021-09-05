@@ -673,7 +673,7 @@ class GameProducer:
         # player got on base, which shouldn't have a decision but does for
         # reasons) and it's hard to fix it to not record that decision. Much
         # easier to just always discard the first decision.
-        assert next(self.steal_sources[batter.id]) == StealDecision.STAY
+        next(self.steal_sources[batter.id])
 
     def _inning_end(self):
         assert self.expects_inning_end

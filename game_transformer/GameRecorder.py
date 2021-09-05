@@ -143,7 +143,8 @@ def get_pitch_type(feed_event: Dict[str, Any],
         else:
             assert " reaches on fielder's choice." in description
             if game_update is None:
-                return PitchType.FIELDERS_CHOICE, None
+                # Things break if I don't pick one, so assume first
+                return PitchType.FIELDERS_CHOICE, 0
             else:
                 # The batter must be the last one in the array
                 return (PitchType.FIELDERS_CHOICE,
@@ -286,6 +287,9 @@ class GameRecorder:
 
     def _record_steal_decision(self, feed_event, runner_id):
         runners = [r for r in self.team.lineup if r.id == runner_id]
+        if not runners:
+            # Must be a ghost
+            return
         assert len(runners) == 1
         runner = runners[0]
 
@@ -449,6 +453,11 @@ class GameRecorder:
                       in self.steal_decisions.items()
                       if runner_id == player_id
                       for decision in decisions]
+
+        if not all_steals:
+            # Sucks for you. You don't get to steal ever.
+            while True:
+                yield StealDecision.STAY
 
         while True:
             yield random.choice(all_steals)
