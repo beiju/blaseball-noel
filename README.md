@@ -160,7 +160,7 @@ the entire game instead, but decided the artefact still being visible in the
 data was interesting, so I kept it.
 
 For pitchers it might be a different story. I will have to see what's the 
-quickest a pitcher has been incinerated (etc.(, but if it's before they pitched 
+quickest a pitcher has been incinerated (etc.), but if it's before they pitched 
 to every player I will have a problem. If they throw one Ball and then get 
 incinerated I will have a *big* problem. In that case I may be forced to use the
 replacement player for the whole game.
